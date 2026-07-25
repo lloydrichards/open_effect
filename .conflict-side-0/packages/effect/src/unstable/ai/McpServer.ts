@@ -838,7 +838,7 @@ const layerMcpProtocolHttp = (options: {
     const { httpEffect, protocol } = yield* RpcServer.makeProtocolWithHttpEffect
     const router = yield* HttpRouter.HttpRouter
     yield* router.add("POST", options.path, (request) => {
-      const protocolVersion = request.headers[mcpProtocolVersionHeader]
+      const protocolVersion = request.headers[MCP_PROTOCOL_VERSION_HEADER]
       if (
         protocolVersion !== undefined &&
         !state.protocolRegistry.protocols.some((protocol) => protocol.protocolVersion === protocolVersion)
@@ -1704,7 +1704,7 @@ const getClientSession = (
   clientId: number,
   headers: Headers.Headers
 ) => {
-  const sessionId = headers[mcpSessionIdHeader]
+  const sessionId = headers[MCP_SESSION_ID_HEADER]
   if (sessionId === undefined) {
     return sessions.byClientId.get(clientId)
   }
