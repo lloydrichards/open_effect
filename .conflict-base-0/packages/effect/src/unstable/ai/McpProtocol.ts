@@ -3,7 +3,6 @@
  *
  * @since 4.0.0
  */
-import type * as RpcGroup from "../rpc/RpcGroup.ts"
 import * as Internal from "./internal/mcpProtocol.ts"
 import * as McpSchema from "./McpSchema.ts"
 
@@ -13,7 +12,7 @@ import * as McpSchema from "./McpSchema.ts"
  * @category protocols
  * @since 4.0.0
  */
-export const v2025_06_18: ProtocolAdapter = Internal.make({
+export const v2025_06_18 = Internal.make({
   protocolVersion: "2025-06-18",
   clientRpcs: McpSchema.ClientRpcs,
   clientNotificationRpcs: McpSchema.ClientNotificationRpcs,
@@ -27,13 +26,7 @@ export const v2025_06_18: ProtocolAdapter = Internal.make({
  * @category models
  * @since 4.0.0
  */
-export type ProtocolAdapter = Internal.ProtocolAdapter<
-  "2025-06-18",
-  RpcGroup.Rpcs<typeof McpSchema.ClientRpcs>,
-  RpcGroup.Rpcs<typeof McpSchema.ClientNotificationRpcs>,
-  RpcGroup.Rpcs<typeof McpSchema.ServerRequestRpcs>,
-  RpcGroup.Rpcs<typeof McpSchema.ServerNotificationRpcs>
->
+export type ProtocolAdapter = typeof v2025_06_18
 
 /**
  * The MCP protocol versions implemented by this release.
