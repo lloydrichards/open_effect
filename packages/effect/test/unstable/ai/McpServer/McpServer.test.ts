@@ -22,7 +22,8 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import { RpcSerialization } from "effect/unstable/rpc"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcClient from "effect/unstable/rpc/RpcClient"
-import { makeServerLayer, makeWebHandler } from "./McpServer/utils.ts"
+import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
+import { makeHttpHarness, makeServerLayer } from "./McpServerTest.ts"
 
 const OptionalStringTool = Tool.make("OptionalStringTool", {
   parameters: Schema.Struct({ signature: Schema.optional(Schema.String) }),
@@ -72,30 +73,22 @@ const pingBody = {
   id: 0
 }
 
-const makeTestClientWith = Effect.fnUntraced(function*<A>(
-  serverLayer: Layer.Layer<A, never, HttpRouter.HttpRouter>,
+const makeTestClientWith = Effect.fnUntraced(function*<A, E>(
+  serverLayer: Layer.Layer<A, E, HttpRouter.HttpRouter>,
   options?: {
     readonly routerLayer?: Layer.Layer<never, never, HttpRouter.HttpRouter> | undefined
   } | undefined
 ) {
-  const responses: Array<Response> = []
-  const handler = yield* makeWebHandler(serverLayer, options)
+  const harness = yield* makeHttpHarness(serverLayer, options)
 
-  let sessionId: string | null = null
-  const customFetch: typeof fetch = async (input, init) => {
-    const request = input instanceof Request ? input : new Request(input, init)
-    if (sessionId) {
-      request.headers.set("Mcp-Session-Id", sessionId)
-    }
-    const response = await handler(request)
-    sessionId = response.headers.get("Mcp-Session-Id") ?? sessionId
-    responses.push(response.clone())
-    return response
-  }
-
-  const clientLayer = RpcClient.layerProtocolHttp({ url: "http://localhost/mcp" }).pipe(
+  const clientLayer = RpcClient.layerProtocolHttp({
+    url: "http://localhost/mcp",
+    transformClient: HttpClient.mapRequest(
+      HttpClientRequest.setHeader("accept", "application/json, text/event-stream")
+    )
+  }).pipe(
     Layer.provideMerge([FetchHttpClient.layer, RpcSerialization.layerJsonRpc()]),
-    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, customFetch))
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, harness.fetch))
   )
   const client = yield* RpcClient.make(McpSchema.ClientRpcs).pipe(
     Effect.provide(clientLayer)
@@ -105,7 +98,7 @@ const makeTestClientWith = Effect.fnUntraced(function*<A>(
     Effect.provide(clientLayer)
   )
 
-  return { client, responses, httpClient }
+  return { client, responses: harness.responses, httpClient }
 })
 
 const makeTestClient = makeTestClientWith(TestServerLayer)
@@ -146,10 +139,56 @@ const makeTestProtocol = (protocolVersion: string, field: "a" | "b") => {
   })
   return InternalMcpProtocol.make({
     protocolVersion,
+    transport: {
+      acceptsOperationalBatches: false,
+      requiresProtocolVersionHeaderOnSubsequentHttpRequests: false
+    },
     clientRpcs: McpSchema.ClientRpcs.omit("ping").add(Ping),
     clientNotificationRpcs: McpSchema.ClientNotificationRpcs,
     serverRequestRpcs: McpSchema.ServerRequestRpcs,
-    serverNotificationRpcs: McpSchema.ServerNotificationRpcs
+    serverNotificationRpcs: McpSchema.ServerNotificationRpcs,
+    handlerRpcs: RpcGroup.make(McpSchema.Initialize),
+    makeHandlers: (_core, lifecycle) => ({
+      initialize: (request, { client }) =>
+        lifecycle.initialize(protocolVersion, {
+          protocolVersion,
+          clientCapabilities: request.capabilities,
+          clientInfo: request.clientInfo
+        }, client.id).pipe(
+          Effect.map((result) => ({
+            ...result,
+            protocolVersion
+          }))
+        )
+    }),
+    toReverseClient: () => ({
+      listRoots: () =>
+        Effect.fail(
+          new McpSchema.McpReverseOperationUnsupported({
+            operation: "roots/list",
+            protocolVersion: "2025-06-18",
+            reason: "Synthetic test adapter"
+          })
+        ),
+      createMessage: () =>
+        Effect.fail(
+          new McpSchema.McpReverseOperationUnsupported({
+            operation: "sampling/createMessage",
+            protocolVersion: "2025-06-18",
+            reason: "Synthetic test adapter"
+          })
+        ),
+      elicit: () =>
+        Effect.fail(
+          new McpSchema.McpReverseOperationUnsupported({
+            operation: "elicitation/create",
+            protocolVersion: "2025-06-18",
+            reason: "Synthetic test adapter"
+          })
+        )
+    }),
+    projectNotification: () => Effect.succeed(undefined),
+    normalizeCancellation: () => Effect.succeed({ requestId: "" })
   })
 }
 
@@ -161,6 +200,7 @@ const makeRawHttpServer = (
       name: "TestServer",
       version: "1.0.0",
       path: "/mcp",
+      // NOTE: override types to allow for testing protocol shapes
       protocols: protocols as unknown as [
         McpProtocol.ProtocolAdapter,
         ...Array<McpProtocol.ProtocolAdapter>
@@ -178,6 +218,7 @@ const makeRawHttpServer = (
           new Request("http://localhost/mcp", {
             method: "POST",
             headers: {
+              accept: "application/json, text/event-stream",
               "content-type": "application/json",
               ...(sessionId ? { "mcp-session-id": sessionId } : {})
             },
@@ -211,6 +252,29 @@ const makeRawHttpServer = (
   })
 
 describe("McpServer", () => {
+  it.effect("should reject browser Origins by default while accepting Origin-less clients", () =>
+    Effect.gen(function*() {
+      const harness = yield* makeHttpHarness(TestServerLayer)
+      assert.strictEqual(
+        (yield* harness.post({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: initializePayload
+        })).status,
+        200
+      )
+      assert.strictEqual(
+        (yield* harness.post({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "initialize",
+          params: initializePayload
+        }, { origin: "https://browser.example" })).status,
+        403
+      )
+    }))
+
   it.effect("should replay the negotiated protocol header when a session is initialized", () =>
     Effect.gen(function*() {
       const { client, responses } = yield* makeTestClient
@@ -227,20 +291,21 @@ describe("McpServer", () => {
       yield* client.ping({})
 
       strictEqual(responses.length, 2)
-      strictEqual(responses[0].headers.get("Mcp-Protocol-Version"), "2025-06-18")
-      strictEqual(responses[1].headers.get("Mcp-Protocol-Version"), "2025-06-18")
+      strictEqual(responses[0].headers.get("Mcp-Protocol-Version"), "2025-03-26")
+      strictEqual(responses[1].headers.get("Mcp-Protocol-Version"), "2025-03-26")
     }))
 
-  it.effect("should return 404 when a non-initialize request omits the MCP session id", () =>
+  it.effect("should return 400 when a non-initialize request omits the MCP session id", () =>
     Effect.gen(function*() {
       const { httpClient } = yield* makeTestClient
 
       const response = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
         HttpClientRequest.bodyJsonUnsafe({ jsonrpc: "2.0", method: "ping", params: {}, id: 0 }),
         httpClient.execute
       )
 
-      strictEqual(response.status, 404)
+      strictEqual(response.status, 400)
     }))
   describe("registerToolkit", () => {
     it.effect("returns concise parameter-validation errors without invoking the handler", () =>
@@ -349,7 +414,7 @@ describe("McpServer", () => {
           arguments: {}
         }).pipe(Effect.flip)
 
-        assert.instanceOf(error, McpSchema.InvalidParams)
+        assert.instanceOf(error, McpSchema.McpErrorBase)
         assert.strictEqual(error.code, McpSchema.INVALID_PARAMS_ERROR_CODE)
         assert.strictEqual(error.message, "Tool 'UnknownTool' not found")
       }))
@@ -379,6 +444,7 @@ describe("McpServer", () => {
       yield* client.initialize(initializePayload)
 
       const notificationResponse = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
         HttpClientRequest.bodyJsonUnsafe({
           jsonrpc: "2.0",
           method: "notifications/initialized",
@@ -393,6 +459,7 @@ describe("McpServer", () => {
       strictEqual(notificationResponse.headers["mcp-protocol-version"], "2025-06-18")
 
       const responseOnly = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
         HttpClientRequest.bodyJsonUnsafe({ jsonrpc: "2.0", id: 1, result: {} }),
         httpClient.execute
       )
@@ -400,6 +467,7 @@ describe("McpServer", () => {
       strictEqual(yield* responseOnly.text, "")
 
       const pingResponse = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
         HttpClientRequest.bodyJsonUnsafe(pingBody),
         httpClient.execute
       )
@@ -415,6 +483,7 @@ describe("McpServer", () => {
       yield* client.initialize(initializePayload)
 
       const unsupportedResponse = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
         HttpClientRequest.bodyJsonUnsafe(pingBody),
         HttpClientRequest.setHeader("Mcp-Protocol-Version", "9999-01-01"),
         httpClient.execute
@@ -424,6 +493,7 @@ describe("McpServer", () => {
       strictEqual(unsupportedResponse.headers["access-control-allow-origin"], "*")
 
       const responseOnly = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
         HttpClientRequest.bodyJsonUnsafe({ jsonrpc: "2.0", id: 1, result: {} }),
         HttpClientRequest.setHeader("Mcp-Protocol-Version", "9999-01-01"),
         httpClient.execute
@@ -432,6 +502,7 @@ describe("McpServer", () => {
       strictEqual(yield* responseOnly.text, "")
 
       const absentVersionResponse = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
         HttpClientRequest.bodyJsonUnsafe(pingBody),
         httpClient.execute
       )
@@ -439,6 +510,7 @@ describe("McpServer", () => {
 
       for (const protocolVersion of ["2025-03-26", "2024-11-05", "2024-10-07"]) {
         const response = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+          HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
           HttpClientRequest.bodyJsonUnsafe(pingBody),
           HttpClientRequest.setHeader("Mcp-Protocol-Version", protocolVersion),
           httpClient.execute
@@ -447,6 +519,7 @@ describe("McpServer", () => {
       }
 
       const declaredVersionResponse = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
         HttpClientRequest.bodyJsonUnsafe(pingBody),
         HttpClientRequest.setHeader("Mcp-Protocol-Version", "2025-06-18"),
         httpClient.execute
@@ -454,8 +527,8 @@ describe("McpServer", () => {
       strictEqual(declaredVersionResponse.status, 200)
     }))
   describe("protocol selection", () => {
-    for (const offeredVersion of ["2025-03-26", "2024-11-05", "2024-10-07"]) {
-      it.effect(`should select June when ${offeredVersion} is offered`, () =>
+    for (const offeredVersion of ["2025-03-26", "2024-11-05"]) {
+      it.effect(`should select ${offeredVersion} when it is offered`, () =>
         Effect.gen(function*() {
           const { client, responses } = yield* makeTestClient
 
@@ -468,10 +541,27 @@ describe("McpServer", () => {
             }
           })
 
-          strictEqual(result.protocolVersion, "2025-06-18")
-          strictEqual(responses[0].headers.get("Mcp-Protocol-Version"), "2025-06-18")
+          strictEqual(result.protocolVersion, offeredVersion)
+          strictEqual(responses[0].headers.get("Mcp-Protocol-Version"), offeredVersion)
         }))
     }
+
+    it.effect("should select June when an unsupported version is offered", () =>
+      Effect.gen(function*() {
+        const { client, responses } = yield* makeTestClient
+
+        const result = yield* client.initialize({
+          protocolVersion: "2024-10-07",
+          capabilities: {},
+          clientInfo: {
+            name: "TestClient",
+            version: "1.0.0"
+          }
+        })
+
+        strictEqual(result.protocolVersion, "2025-06-18")
+        strictEqual(responses[0].headers.get("Mcp-Protocol-Version"), "2025-06-18")
+      }))
 
     it.effect("should decode with the pinned adapter when sessions use incompatible schemas", () =>
       Effect.gen(function*() {
@@ -500,9 +590,10 @@ describe("McpServer", () => {
           params: { b: 1 }
         }, sessionB.sessionId)
 
-        const invalidBody = (yield* Effect.promise(() => wrongForA.json())) as Record<string, unknown>
-        const validABody = (yield* Effect.promise(() => validForA.json())) as Record<string, unknown>
-        const validBBody = (yield* Effect.promise(() => validForB.json())) as Record<string, unknown>
+        const decodeBody = Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Unknown))
+        const invalidBody = yield* Effect.promise<unknown>(() => wrongForA.json()).pipe(Effect.flatMap(decodeBody))
+        const validABody = yield* Effect.promise<unknown>(() => validForA.json()).pipe(Effect.flatMap(decodeBody))
+        const validBBody = yield* Effect.promise<unknown>(() => validForB.json()).pipe(Effect.flatMap(decodeBody))
         assert.property(invalidBody, "error")
         assert.deepStrictEqual(validABody, { jsonrpc: "2.0", id: 4, result: {} })
         assert.deepStrictEqual(validBBody, { jsonrpc: "2.0", id: 5, result: {} })
