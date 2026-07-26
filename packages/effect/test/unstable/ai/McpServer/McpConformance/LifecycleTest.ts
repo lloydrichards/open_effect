@@ -13,20 +13,25 @@ export const suite = (
       // version entrypoints that compose this suite.
       describe("Lifecycle Phases", () => {
         describe("Initialization", () => {
-          it.effect("MUST requires initialize to be the first request", () =>
+          it.effect("MUST reject non-ping requests before initialize", () =>
             Effect.gen(function*() {
               const test = yield* McpConformanceTest
-              const response = yield* test.post(test.pingRequest())
+              const response = yield* test.post({
+                jsonrpc: "2.0",
+                id: 1,
+                method: "tools/list",
+                params: {}
+              })
 
-              assert.isAtLeast(response.status, 400)
+              assert.strictEqual(response.status, 400)
             }))
 
-          it.effect("MUST rejects initialized notifications before initialize", () =>
+          it.effect("MUST reject initialized notifications before initialize", () =>
             Effect.gen(function*() {
               const test = yield* McpConformanceTest
               const response = yield* test.post(test.initializedNotification)
 
-              assert.isAtLeast(response.status, 400)
+              assert.strictEqual(response.status, 400)
             }))
 
           it.effect("SCHEMA requires protocolVersion, capabilities, and clientInfo", () =>
@@ -75,7 +80,7 @@ export const suite = (
               assert.match(sessionId, /^[\x21-\x7e]+$/)
             }))
 
-          it.effect("MUST accepts initialized after a successful initialize response", () =>
+          it.effect("MUST accept initialized after a successful initialize response", () =>
             Effect.gen(function*() {
               const test = yield* McpConformanceTest
               const initialized = yield* test.initialize()
@@ -89,7 +94,7 @@ export const suite = (
         })
 
         describe("Version Negotiation", () => {
-          it.effect("MUST echoes a requested version supported by the server", () =>
+          it.effect("MUST echo a requested version supported by the server", () =>
             Effect.gen(function*() {
               const test = yield* McpConformanceTest
               const { message } = yield* test.initialize()
@@ -97,7 +102,7 @@ export const suite = (
               assert.strictEqual(message.result.protocolVersion, protocol.protocolVersion)
             }))
 
-          it.effect("MUST negotiates an unsupported requested version to a supported version", () =>
+          it.effect("SHOULD negotiate an unsupported requested version to a supported version", () =>
             Effect.gen(function*() {
               const test = yield* McpConformanceTest
               const { message } = yield* test.initialize({
@@ -109,7 +114,7 @@ export const suite = (
         })
 
         describe("Capability Negotiation", () => {
-          it.effect("SCHEMA advertises the capabilities provided by the server", () =>
+          it.effect("SCHEMA advertises the registered prompt, resource, and tool capabilities", () =>
             Effect.gen(function*() {
               const test = yield* McpConformanceTest
               const { message } = yield* test.initialize({ server: "features" })
@@ -124,7 +129,7 @@ export const suite = (
         })
 
         describe("Operation", () => {
-          it.effect("MUST continues to use the version negotiated during initialization", () =>
+          it.effect("MUST continue to use the version negotiated during initialization", () =>
             Effect.gen(function*() {
               const test = yield* McpConformanceTest
               const initialized = yield* test.initialize()
@@ -136,18 +141,6 @@ export const suite = (
               assert.strictEqual(response.headers.get("Mcp-Protocol-Version"), protocol.protocolVersion)
             }))
         })
-      })
-
-      describe("Error Handling", () => {
-        it.effect("SCENARIO handles protocol version mismatch through version negotiation", () =>
-          Effect.gen(function*() {
-            const test = yield* McpConformanceTest
-            const { message } = yield* test.initialize({
-              protocolVersion: "invalid-version"
-            })
-
-            assert.strictEqual(message.result.protocolVersion, protocol.protocolVersion)
-          }))
       })
     })
   })
