@@ -1,16 +1,18 @@
 import { assert, describe, it } from "@effect/vitest"
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import type * as McpProtocol from "effect/unstable/ai/McpProtocol"
 import * as McpSchema from "effect/unstable/ai/McpSchema"
-import { McpConformanceTest, type TestLayer } from "./McpConformanceTest.ts"
+import { makeMcpStdioHarness } from "../TestUtils/McpStdioHarness.ts"
+import { McpConformance, type McpConformanceLayer } from "./McpConformance.ts"
 
 const decodeTools = Schema.decodeUnknownEffect(McpSchema.ListToolsResult)
 const decodeCallTool = Schema.decodeUnknownEffect(McpSchema.CallToolResult)
 
 const callTool = (name: string, arguments_: Record<string, unknown> = {}) =>
   Effect.gen(function*() {
-    const test = yield* McpConformanceTest
+    const test = yield* McpConformance
     const initialized = yield* test.initialize({ server: "features" })
     yield* test.notifyInitialized(initialized)
     const response = yield* test.send(initialized, {
@@ -24,14 +26,14 @@ const callTool = (name: string, arguments_: Record<string, unknown> = {}) =>
     )
   })
 
-export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =>
+export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConformanceLayer) =>
   it.layer(layer)(`Mcp Conformance (${protocol.protocolVersion})`, (it) => {
     describe("Tools", () => {
       // Identical requirements in the 2024-11-05, 2025-03-26, and 2025-06-18 specifications.
       describe("Capabilities", () => {
         it.effect("MUST advertise the tools capability when tools are registered", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const initialized = yield* test.initialize({ server: "features" })
 
             assert.property(initialized.message.result.capabilities, "tools")
@@ -39,7 +41,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
 
         it.effect("MUST NOT advertise the tools capability when tools are not supported", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const initialized = yield* test.initialize()
 
             assert.notProperty(initialized.message.result.capabilities, "tools")
@@ -47,7 +49,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
 
         it.effect("MUST advertise listChanged when tool list change notifications are supported", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const initialized = yield* test.initialize({ server: "features" })
 
             assert.strictEqual(initialized.message.result.capabilities.tools?.listChanged, true)
@@ -57,7 +59,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
       describe("Listing Tools", () => {
         it.effect("MUST list every tool visible to the initialized client", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const initialized = yield* test.initialize({ server: "features" })
             yield* test.notifyInitialized(initialized)
 
@@ -89,7 +91,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
 
         it.effect("SCHEMA preserves tool names and descriptions", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const initialized = yield* test.initialize({ server: "features" })
             yield* test.notifyInitialized(initialized)
             const response = yield* test.send(initialized, {
@@ -109,7 +111,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
 
         it.effect("MUST return each tool input schema", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const initialized = yield* test.initialize({ server: "features" })
             yield* test.notifyInitialized(initialized)
             const response = yield* test.send(initialized, {
@@ -125,11 +127,12 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
             assert.isTrue(result.tools.every((tool) => tool.inputSchema.type === "object"))
           }))
         if (protocol.protocolVersion === "2025-06-18") {
-          // DECISION: Decide whether Toolkit `success` schemas declare an MCP
-          // `outputSchema`; MCP only requires conformance when one is declared.
+          // FIX: registerToolkit does not derive the MCP outputSchema from a
+          // compatible object-shaped Toolkit success schema, even though tool
+          // calls return the encoded success value as structuredContent.
           it.effect.skip("MUST return each declared tool output schema", () =>
             Effect.gen(function*() {
-              const test = yield* McpConformanceTest
+              const test = yield* McpConformance
               const initialized = yield* test.initialize({ server: "features" })
               yield* test.notifyInitialized(initialized)
               const response = yield* test.send(initialized, {
@@ -142,7 +145,10 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
                 Effect.flatMap((message) => decodeTools(message.result))
               )
 
-              assert.strictEqual(result.tools.find((tool) => tool.name === "StructuredTool")?.outputSchema?.type, "object")
+              assert.strictEqual(
+                result.tools.find((tool) => tool.name === "StructuredTool")?.outputSchema?.type,
+                "object"
+              )
             }))
         }
       })
@@ -150,7 +156,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
       describe("Calling Tools", () => {
         it.effect("MUST call a registered tool with valid arguments", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const initialized = yield* test.initialize({ server: "features" })
             yield* test.notifyInitialized(initialized)
             const response = yield* test.send(initialized, {
@@ -172,7 +178,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
 
         it.effect("MUST reject an unknown tool name with a protocol error", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const initialized = yield* test.initialize({ server: "features" })
             yield* test.notifyInitialized(initialized)
             const response = yield* test.send(initialized, {
@@ -194,7 +200,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
         // Invalid Params protocol error.
         it.effect.skip("MUST reject arguments that do not match the input schema with a protocol error", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const initialized = yield* test.initialize({ server: "features" })
             yield* test.notifyInitialized(initialized)
             const response = yield* test.send(initialized, {
@@ -212,7 +218,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
           }))
         it.effect("MUST not invoke a tool handler when argument validation fails", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             yield* test.resetObservations
             const initialized = yield* test.initialize({ server: "features" })
             yield* test.notifyInitialized(initialized)
@@ -230,7 +236,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
           }))
         it.effect("SCHEMA returns text content", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const initialized = yield* test.initialize({ server: "features" })
             yield* test.notifyInitialized(initialized)
             const response = yield* test.send(initialized, {
@@ -315,7 +321,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
           }))
         it.effect("MUST keep tool execution errors distinct from protocol errors", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const initialized = yield* test.initialize({ server: "features" })
             yield* test.notifyInitialized(initialized)
 
@@ -336,7 +342,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
         // JSON-RPC error message and data fields.
         it.effect.skip("SHOULD not expose defects or internal error details", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const initialized = yield* test.initialize({ server: "features" })
             yield* test.notifyInitialized(initialized)
             const response = yield* test.send(initialized, {
@@ -352,9 +358,41 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
       })
 
       describe("List Changed Notification", () => {
-        // HARNESS: Requires dynamic registration plus an observable outbound
-        // notification stream.
-        it.skip("SHOULD send a tool list changed notification when the advertised list changes", () => {})
+        it.effect("SHOULD send a tool list changed notification when the advertised list changes", () =>
+          Effect.gen(function*() {
+            const fixture = yield* makeMcpStdioHarness(protocol)
+            const supportedProtocolVersions: ReadonlyArray<McpProtocol.ProtocolVersion> = [
+              "2024-11-05",
+              "2025-03-26",
+              "2025-06-18"
+            ]
+            const makeTool = (name: string) => ({
+              tool: new McpSchema.Tool({
+                name,
+                inputSchema: { type: "object", properties: {} }
+              }),
+              annotations: Context.empty(),
+              supportedProtocolVersions,
+              handle: () => Effect.succeed(new McpSchema.CallToolResult({ content: [] }))
+            })
+            yield* fixture.server.addTool(makeTool("baseline-list-changed-tool"))
+            const initialized = yield* fixture.initialize()
+            const initializeResult = yield* Schema.decodeUnknownEffect(McpSchema.InitializeResult)(initialized.result)
+            assert.strictEqual(
+              initializeResult.capabilities.tools?.listChanged,
+              true
+            )
+
+            yield* fixture.server.addTool(makeTool("dynamic-list-changed-tool"))
+            const notification = yield* fixture.awaitOutboundMethod("notifications/tools/list_changed")
+            assert.strictEqual(notification.jsonrpc, "2.0")
+            assert.strictEqual(notification.method, "notifications/tools/list_changed")
+            assert.notProperty(notification, "id")
+
+            const response = yield* fixture.sendRequest("tools/list", {})
+            const result = yield* decodeTools(response.result)
+            assert.isTrue(result.tools.some((tool) => tool.name === "dynamic-list-changed-tool"))
+          }))
       })
     })
   })

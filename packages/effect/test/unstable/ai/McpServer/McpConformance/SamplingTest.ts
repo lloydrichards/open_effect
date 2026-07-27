@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import type * as McpProtocol from "effect/unstable/ai/McpProtocol"
 import * as McpSchema from "effect/unstable/ai/McpSchema"
-import { McpConformanceTest, type TestLayer } from "./McpConformanceTest.ts"
+import { McpConformance, type McpConformanceLayer } from "./McpConformance.ts"
 
 const SamplingRequest = Schema.Struct({
   messages: Schema.Array(Schema.Struct({
@@ -62,7 +62,7 @@ const samplingRequestWithOptions = McpSchema.CreateMessage.payloadSchema.make({
   metadata: { request: "metadata" }
 })
 
-export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =>
+export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConformanceLayer) =>
   it.layer(layer)(`Mcp Conformance (${protocol.protocolVersion})`, (it) => {
     describe("Sampling", () => {
       // Text and image sampling are shared by all three dated specifications.
@@ -70,7 +70,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
       describe("Capabilities", () => {
         it.effect("MUST send sampling requests when the client advertises sampling", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const peer = yield* test.makePeer({
               capabilities: { sampling: {} },
               handlers: {
@@ -85,7 +85,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
 
         it.effect("MUST NOT send sampling requests when the client omits the sampling capability", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const peer = yield* test.makePeer()
             const error = yield* peer.client.createMessage(samplingRequest).pipe(Effect.flip)
 
@@ -99,7 +99,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
         // the spec-defined optional model preferences before adapter projection.
         it.effect.skip("MUST preserve message order and sampling request options", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const peer = yield* test.makePeer({
               capabilities: { sampling: {} },
               handlers: {
@@ -136,7 +136,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
 
         it.effect("MUST accept and decode text sampling content", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const peer = yield* test.makePeer({
               capabilities: { sampling: {} },
               handlers: {
@@ -157,7 +157,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
 
         it.effect("MUST accept image sampling content", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const peer = yield* test.makePeer({
               capabilities: { sampling: {} },
               handlers: {
@@ -186,7 +186,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
         if (protocol.protocolVersion !== "2024-11-05") {
           it.effect("MUST accept audio sampling content", () =>
             Effect.gen(function*() {
-              const test = yield* McpConformanceTest
+              const test = yield* McpConformance
               const peer = yield* test.makePeer({
                 capabilities: { sampling: {} },
                 handlers: {
@@ -215,7 +215,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: TestLayer) =
 
         it.effect("MUST surface sampling errors returned by the client", () =>
           Effect.gen(function*() {
-            const test = yield* McpConformanceTest
+            const test = yield* McpConformance
             const peer = yield* test.makePeer({
               capabilities: { sampling: {} },
               handlers: {

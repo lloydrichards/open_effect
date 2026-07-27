@@ -1,11 +1,11 @@
 import { assert, describe, it } from "@effect/vitest"
 import * as Effect from "effect/Effect"
 import type * as McpProtocol from "effect/unstable/ai/McpProtocol"
-import { McpConformanceTest, type TestLayer } from "./McpConformanceTest.ts"
+import { McpConformance, type McpConformanceLayer } from "./McpConformance.ts"
 
 export const suite = (
   protocol: McpProtocol.ProtocolAdapter,
-  layer: TestLayer
+  layer: McpConformanceLayer
 ) =>
   it.layer(layer)(`Mcp Conformance (${protocol.protocolVersion})`, (it) => {
     describe("Lifecycle", () => {
@@ -15,7 +15,7 @@ export const suite = (
         describe("Initialization", () => {
           it.effect("MUST reject non-ping requests before initialize", () =>
             Effect.gen(function*() {
-              const test = yield* McpConformanceTest
+              const test = yield* McpConformance
               const response = yield* test.post({
                 jsonrpc: "2.0",
                 id: 1,
@@ -28,7 +28,7 @@ export const suite = (
 
           it.effect("MUST reject initialized notifications before initialize", () =>
             Effect.gen(function*() {
-              const test = yield* McpConformanceTest
+              const test = yield* McpConformance
               const response = yield* test.post(test.initializedNotification)
 
               assert.strictEqual(response.status, 400)
@@ -36,7 +36,7 @@ export const suite = (
 
           it.effect("SCHEMA requires protocolVersion, capabilities, and clientInfo", () =>
             Effect.gen(function*() {
-              const test = yield* McpConformanceTest
+              const test = yield* McpConformance
               const invalidParams = [
                 {
                   capabilities: {},
@@ -69,7 +69,7 @@ export const suite = (
 
           it.effect("SCHEMA returns server capabilities and implementation information", () =>
             Effect.gen(function*() {
-              const test = yield* McpConformanceTest
+              const test = yield* McpConformance
               const { message, response, sessionId } = yield* test.initialize()
 
               assert.strictEqual(response.status, 200)
@@ -82,7 +82,7 @@ export const suite = (
 
           it.effect("MUST accept initialized after a successful initialize response", () =>
             Effect.gen(function*() {
-              const test = yield* McpConformanceTest
+              const test = yield* McpConformance
               const initialized = yield* test.initialize()
               assert.isNotNull(initialized.sessionId)
 
@@ -96,7 +96,7 @@ export const suite = (
         describe("Version Negotiation", () => {
           it.effect("MUST echo a requested version supported by the server", () =>
             Effect.gen(function*() {
-              const test = yield* McpConformanceTest
+              const test = yield* McpConformance
               const { message } = yield* test.initialize()
 
               assert.strictEqual(message.result.protocolVersion, protocol.protocolVersion)
@@ -104,7 +104,7 @@ export const suite = (
 
           it.effect("SHOULD negotiate an unsupported requested version to a supported version", () =>
             Effect.gen(function*() {
-              const test = yield* McpConformanceTest
+              const test = yield* McpConformance
               const { message } = yield* test.initialize({
                 protocolVersion: "unsupported-version"
               })
@@ -116,7 +116,7 @@ export const suite = (
         describe("Capability Negotiation", () => {
           it.effect("SCHEMA advertises the registered prompt, resource, and tool capabilities", () =>
             Effect.gen(function*() {
-              const test = yield* McpConformanceTest
+              const test = yield* McpConformance
               const { message } = yield* test.initialize({ server: "features" })
 
               assert.deepStrictEqual(message.result.capabilities.prompts, { listChanged: true })
@@ -131,7 +131,7 @@ export const suite = (
         describe("Operation", () => {
           it.effect("MUST continue to use the version negotiated during initialization", () =>
             Effect.gen(function*() {
-              const test = yield* McpConformanceTest
+              const test = yield* McpConformance
               const initialized = yield* test.initialize()
               assert.isNotNull(initialized.sessionId)
 

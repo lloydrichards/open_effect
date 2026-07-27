@@ -23,7 +23,8 @@ import { RpcSerialization } from "effect/unstable/rpc"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcClient from "effect/unstable/rpc/RpcClient"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
-import { makeHttpHarness, makeServerLayer } from "./McpServerTest.ts"
+import { makeHttpHarness } from "./TestUtils/McpHttpHarness.ts"
+import { makeServerLayer } from "./TestUtils/McpServerLayer.ts"
 
 const OptionalStringTool = Tool.make("OptionalStringTool", {
   parameters: Schema.Struct({ signature: Schema.optional(Schema.String) }),
