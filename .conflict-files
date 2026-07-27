@@ -1,3 +1,0 @@
-ancestorEntries = ["packages/effect/src/unstable/ai/McpServer.ts", "packages/effect/src/unstable/ai/internal/mcpProtocol.ts"]
-ourEntries = ["packages/effect/src/unstable/ai/McpServer.ts", "packages/effect/src/unstable/ai/internal/mcpProtocol.ts"]
-theirEntries = ["packages/effect/src/unstable/ai/McpServer.ts", "packages/effect/src/unstable/ai/internal/mcpProtocol.ts"]
