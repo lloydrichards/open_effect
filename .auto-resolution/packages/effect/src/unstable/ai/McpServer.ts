@@ -404,6 +404,16 @@ type SessionLogLevel =
     readonly level: LoggingLevel
   }
 
+type SessionLogLevel =
+  | {
+    readonly _tag: "Effect"
+    readonly level: LogLevel.LogLevel
+  }
+  | {
+    readonly _tag: "Mcp"
+    readonly level: LoggingLevel
+  }
+
 interface Session {
   readonly initializePayload: typeof Initialize.payloadSchema.Type
   readonly protocol: McpProtocol.ProtocolAdapter
