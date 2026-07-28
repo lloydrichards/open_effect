@@ -383,6 +383,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
             const fixture = yield* makeMcpStdioHarness(protocol)
             yield* fixture.server.addResource(makeResource("file:///subscription-target", "subscription-target"))
             yield* fixture.server.addResource(makeResource("file:///subscription-sentinel", "subscription-sentinel"))
+            yield* fixture.server.addResource(makeResource("file:///subscription-sentinel", "subscription-sentinel"))
             yield* fixture.initialize()
             yield* fixture.sendRequest("resources/subscribe", {
               uri: "file:///subscription-target"

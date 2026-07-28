@@ -141,6 +141,54 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
               assert.strictEqual(message.id, null)
               assert.strictEqual(message.error.code, McpSchema.INVALID_REQUEST_ERROR_CODE)
             }))
+
+          it.effect("MUST not reply to unknown notifications", () =>
+            Effect.gen(function*() {
+              const test = yield* McpConformance
+              const initialized = yield* test.initialize()
+              yield* test.notifyInitialized(initialized)
+
+              const response = yield* test.send(initialized, {
+                jsonrpc: "2.0",
+                method: "unknown/method"
+              })
+
+              assert.strictEqual(response.status, 202)
+              assert.strictEqual(yield* Effect.promise(() => response.text()), "")
+            }))
+
+          it.effect("MUST not reply to notifications with invalid params", () =>
+            Effect.gen(function*() {
+              const test = yield* McpConformance
+              const initialized = yield* test.initialize()
+              yield* test.notifyInitialized(initialized)
+
+              const response = yield* test.send(initialized, {
+                jsonrpc: "2.0",
+                method: "ping",
+                params: "invalid"
+              })
+
+              assert.strictEqual(response.status, 202)
+              assert.strictEqual(yield* Effect.promise(() => response.text()), "")
+            }))
+
+          it.effect("MUST reject requests with invalid identifiers", () =>
+            Effect.gen(function*() {
+              const test = yield* McpConformance
+              const initialized = yield* test.initialize()
+              yield* test.notifyInitialized(initialized)
+
+              const response = yield* test.send(initialized, {
+                jsonrpc: "2.0",
+                id: true,
+                method: "ping"
+              })
+              const message = yield* test.decodeError(response)
+
+              assert.strictEqual(message.id, null)
+              assert.strictEqual(message.error.code, -32600)
+            }))
         })
 
         describe("Responses", () => {
