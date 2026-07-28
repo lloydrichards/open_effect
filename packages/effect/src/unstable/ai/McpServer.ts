@@ -714,6 +714,27 @@ const runWithProtocolState = Effect.fnUntraced(function*(options: {
                       Effect.asVoid
                     )
                   }
+                  if (
+                    request.tag === "notifications/roots/list_changed" &&
+                    session.initializePayload.capabilities.roots?.listChanged === true
+                  ) {
+                    if (httpRequest !== undefined) {
+                      return Effect.void
+                    }
+                    return RcMap.get(
+                      clients,
+                      new McpClientKey({
+                        clientId,
+                        protocolVersion: selectedProtocol.protocolVersion
+                      })
+                    ).pipe(
+                      Effect.flatMap(({ client }) => client["roots/list"](undefined)),
+                      Effect.scoped,
+                      Effect.ignoreCause,
+                      Effect.forkIn(serverScope),
+                      Effect.asVoid
+                    )
+                  }
                   const handler = handlers.mapUnsafe.get(rpc.key) as Rpc.Handler<string> | undefined
                   return handler
                     ? handler.handler(payload, {
