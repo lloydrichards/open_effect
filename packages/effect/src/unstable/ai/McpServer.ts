@@ -741,7 +741,10 @@ const runWithProtocolState = Effect.fnUntraced(function*(options: {
                       requestId: request.id,
                       exit: {
                         _tag: "Failure",
-                        cause: [{ _tag: "Fail", error: new InvalidParams({ message: "Invalid method parameters" }) }]
+                        cause: [{
+                          _tag: "Fail",
+                          error: new InvalidParams({ message: "Invalid method parameters" })
+                        }]
                       }
                     })
               })

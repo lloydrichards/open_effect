@@ -132,6 +132,14 @@ export const ProgressToken: Schema.Union<[
  */
 export type ProgressToken = typeof ProgressToken.Type
 
+/** @internal */
+const RequestMetaValue = Schema.StructWithRest(
+  Schema.Struct({
+    progressToken: Schema.optionalKey(ProgressToken)
+  }),
+  [Schema.Record(Schema.String, Schema.Json)]
+)
+
 /**
  * Schema for optional MCP request metadata.
  *
@@ -144,16 +152,10 @@ export type ProgressToken = typeof ProgressToken.Type
  * @since 4.0.0
  */
 export class RequestMeta extends Schema.Opaque<RequestMeta>()(Schema.Struct({
-  _meta: optional(Schema.Struct({
-    /**
-     * If specified, the caller is requesting out-of-band progress notifications
-     * for this request (as represented by notifications/progress). The value of
-     * this parameter is an opaque token that will be attached to any subsequent
-     * notifications. The receiver is not obligated to provide these
-     * notifications.
-     */
-    progressToken: optional(ProgressToken)
-  }))
+  /**
+   * Optional request metadata, including progress tokens and extension fields.
+   */
+  _meta: optional(RequestMetaValue)
 })) {}
 
 /**
@@ -279,8 +281,8 @@ export type Role = typeof Role.Type
  *
  * **When to use**
  *
- * Use to describe intended audience and priority metadata for objects shown or
- * processed by a client.
+ * Use to describe intended audience, priority, and modification metadata for
+ * objects shown or processed by a client.
  *
  * @category schemas
  * @since 4.0.0
@@ -300,7 +302,11 @@ export class Annotations extends Schema.Opaque<Annotations>()(Schema.Struct({
    * effectively required, while 0 means "least important," and indicates that
    * the data is entirely optional.
    */
-  priority: optional(Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })))
+  priority: optional(Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }))),
+  /**
+   * The moment the annotated object was last modified, as an ISO 8601 string.
+   */
+  lastModified: optional(Schema.String)
 })) {}
 
 /**
@@ -542,7 +548,7 @@ export const PARSE_ERROR_CODE = -32700 as const
  */
 export class ParseError extends Schema.ErrorClass<ParseError>("effect/ai/McpSchema/ParseError")({
   ...McpErrorBase.fields,
-  _tag: Schema.tag("ParseError"),
+  _tag: Schema.tagDefaultOmit("ParseError"),
   code: Schema.tag(PARSE_ERROR_CODE)
 }) {}
 
@@ -563,7 +569,7 @@ export class ParseError extends Schema.ErrorClass<ParseError>("effect/ai/McpSche
  */
 export class InvalidRequest extends Schema.ErrorClass<InvalidRequest>("effect/ai/McpSchema/InvalidRequest")({
   ...McpErrorBase.fields,
-  _tag: Schema.tag("InvalidRequest"),
+  _tag: Schema.tagDefaultOmit("InvalidRequest"),
   code: Schema.tag(INVALID_REQUEST_ERROR_CODE)
 }) {}
 
@@ -583,7 +589,7 @@ export class InvalidRequest extends Schema.ErrorClass<InvalidRequest>("effect/ai
  */
 export class MethodNotFound extends Schema.ErrorClass<MethodNotFound>("effect/ai/McpSchema/MethodNotFound")({
   ...McpErrorBase.fields,
-  _tag: Schema.tag("MethodNotFound"),
+  _tag: Schema.tagDefaultOmit("MethodNotFound"),
   code: Schema.tag(METHOD_NOT_FOUND_ERROR_CODE)
 }) {}
 
@@ -604,7 +610,7 @@ export class MethodNotFound extends Schema.ErrorClass<MethodNotFound>("effect/ai
  */
 export class InvalidParams extends Schema.ErrorClass<InvalidParams>("effect/ai/McpSchema/InvalidParams")({
   ...McpErrorBase.fields,
-  _tag: Schema.tag("InvalidParams"),
+  _tag: Schema.tagDefaultOmit("InvalidParams"),
   code: Schema.tag(INVALID_PARAMS_ERROR_CODE)
 }) {}
 
@@ -626,7 +632,7 @@ export class InvalidParams extends Schema.ErrorClass<InvalidParams>("effect/ai/M
  */
 export class InternalError extends Schema.ErrorClass<InternalError>("effect/ai/McpSchema/InternalError")({
   ...McpErrorBase.fields,
-  _tag: Schema.tag("InternalError"),
+  _tag: Schema.tagDefaultOmit("InternalError"),
   code: Schema.tag(INTERNAL_ERROR_CODE)
 }) {
   static readonly notImplemented = new InternalError({ message: "Not implemented" })
@@ -856,7 +862,7 @@ export class Resource extends Schema.Class<Resource>(
    * This can be used by Hosts to display file sizes and estimate context
    * window usage.
    */
-  size: optional(Schema.Int),
+  size: optional(Schema.Finite),
   /**
    * Optional additional metadata for the client.
    *
@@ -1188,7 +1194,11 @@ export class TextContent extends Schema.Opaque<TextContent>()(Schema.Struct({
   /**
    * Optional annotations for the client.
    */
-  annotations: optional(Annotations)
+  annotations: optional(Annotations),
+  /**
+   * Optional additional metadata for the client.
+   */
+  _meta: optional(Schema.Record(Schema.String, Schema.Json))
 })) {}
 
 /**
@@ -1211,7 +1221,11 @@ export class ImageContent extends Schema.Opaque<ImageContent>()(Schema.Struct({
   /**
    * Optional annotations for the client.
    */
-  annotations: optional(Annotations)
+  annotations: optional(Annotations),
+  /**
+   * Optional additional metadata for the client.
+   */
+  _meta: optional(Schema.Record(Schema.String, Schema.Json))
 })) {}
 
 /**
@@ -1234,7 +1248,11 @@ export class AudioContent extends Schema.Opaque<AudioContent>()(Schema.Struct({
   /**
    * Optional annotations for the client.
    */
-  annotations: optional(Annotations)
+  annotations: optional(Annotations),
+  /**
+   * Optional additional metadata for the client.
+   */
+  _meta: optional(Schema.Record(Schema.String, Schema.Json))
 })) {}
 
 /**
@@ -1254,7 +1272,11 @@ export class EmbeddedResource extends Schema.Opaque<EmbeddedResource>()(Schema.S
   /**
    * Optional annotations for the client.
    */
-  annotations: optional(Annotations)
+  annotations: optional(Annotations),
+  /**
+   * Optional additional metadata for the client.
+   */
+  _meta: optional(Schema.Record(Schema.String, Schema.Json))
 })) {}
 
 /**
