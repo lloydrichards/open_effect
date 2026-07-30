@@ -34,4 +34,29 @@ export interface ResourceRuntime {
 }
 
 /** @internal */
-export interface Runtime extends ToolRuntime, ResourceRuntime {}
+export interface PromptRuntime {
+  readonly listPrompts: (
+    profile: McpCore.ClientProfile | undefined
+  ) => ReadonlyArray<McpSchema.Prompt>
+  readonly getPrompt: (
+    request: typeof McpSchema.GetPrompt.payloadSchema.Type
+  ) => Effect.Effect<
+    McpSchema.GetPromptResult,
+    McpSchema.InvalidParams | McpSchema.InternalError,
+    McpSchema.McpServerClient
+  >
+}
+
+/** @internal */
+export interface CompletionRuntime {
+  readonly complete: (
+    request: typeof McpSchema.Complete.payloadSchema.Type
+  ) => Effect.Effect<
+    McpSchema.CompleteResult,
+    McpSchema.InvalidParams | McpSchema.InternalError,
+    McpSchema.McpServerClient
+  >
+}
+
+/** @internal */
+export interface Runtime extends ToolRuntime, ResourceRuntime, PromptRuntime, CompletionRuntime {}

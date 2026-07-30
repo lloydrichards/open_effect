@@ -19,14 +19,26 @@ const ResourceRpcs = RpcGroup.make(
   DatedMcpSchema.ListResourceTemplates
 ).middleware(McpSchema.McpServerClientMiddleware)
 
-const ClientHandlerRpcs = ToolRpcs.merge(ResourceRpcs)
+const PromptRpcs = RpcGroup.make(
+  DatedMcpSchema.ListPrompts,
+  DatedMcpSchema.GetPrompt
+).middleware(McpSchema.McpServerClientMiddleware)
+
+const CompletionRpcs = RpcGroup.make(
+  DatedMcpSchema.Complete
+).middleware(McpSchema.McpServerClientMiddleware)
+
+const ClientHandlerRpcs = ToolRpcs.merge(ResourceRpcs).merge(PromptRpcs).merge(CompletionRpcs)
 
 const ClientRpcs = McpSchema.ClientRpcs.omit(
   "tools/list",
   "tools/call",
   "resources/list",
   "resources/read",
-  "resources/templates/list"
+  "resources/templates/list",
+  "prompts/list",
+  "prompts/get",
+  "completion/complete"
 ).merge(ClientHandlerRpcs)
 
 const projectAnnotations = (
@@ -288,6 +300,100 @@ export const v2025_06_18: ProtocolAdapter = InternalProtocolAdapter.make({
               _meta: template._meta
             })
           )
+        })
+      }),
+      "prompts/list": Effect.fnUntraced(function*() {
+        const client = yield* McpSchema.McpServerClient
+        return DatedMcpSchema.ListPromptsResult.make({
+          prompts: runtime.listPrompts({
+            protocolVersion: client.initializePayload.protocolVersion,
+            capabilities: client.initializePayload.capabilities,
+            clientInfo: client.initializePayload.clientInfo,
+            metadata: client.initializePayload._meta
+          }).map((prompt) =>
+            DatedMcpSchema.Prompt.make({
+              name: prompt.name,
+              title: prompt.title,
+              description: prompt.description,
+              arguments: prompt.arguments?.map((argument) =>
+                DatedMcpSchema.PromptArgument.make({
+                  name: argument.name,
+                  title: argument.title,
+                  description: argument.description,
+                  required: argument.required
+                })
+              )
+            })
+          )
+        })
+      }),
+      "prompts/get": Effect.fnUntraced(function*(request) {
+        const result = yield* runtime.getPrompt({
+          name: request.name,
+          arguments: request.arguments,
+          _meta: request._meta
+        }).pipe(
+          Effect.mapError((error) =>
+            error._tag === "InvalidParams"
+              ? new DatedMcpSchema.InvalidParams({
+                message: error.message,
+                data: error.data
+              })
+              : new DatedMcpSchema.InternalError({
+                message: error.message,
+                data: error.data
+              })
+          )
+        )
+        return DatedMcpSchema.GetPromptResult.make({
+          description: result.description,
+          messages: result.messages.map((message) => ({
+            role: message.role,
+            content: projectContent(message.content)
+          })),
+          _meta: result._meta
+        })
+      }),
+      "completion/complete": Effect.fnUntraced(function*(request) {
+        const result = yield* runtime.complete({
+          ref: request.ref.type === "ref/prompt"
+            ? {
+              type: "ref/prompt",
+              name: request.ref.name,
+              title: request.ref.title
+            }
+            : {
+              type: "ref/resource",
+              uri: request.ref.uri
+            },
+          argument: {
+            name: request.argument.name,
+            value: request.argument.value
+          },
+          context: {
+            arguments: request.context?.arguments ?? {}
+          },
+          _meta: request._meta
+        }).pipe(
+          Effect.mapError((error) =>
+            error._tag === "InvalidParams"
+              ? new DatedMcpSchema.InvalidParams({
+                message: error.message,
+                data: error.data
+              })
+              : new DatedMcpSchema.InternalError({
+                message: error.message,
+                data: error.data
+              })
+          )
+        )
+        return DatedMcpSchema.CompleteResult.make({
+          completion: {
+            values: result.completion.values,
+            total: result.completion.total,
+            hasMore: result.completion.hasMore
+          },
+          _meta: result._meta
         })
       })
     })

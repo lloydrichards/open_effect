@@ -12,6 +12,8 @@ import * as Result from "../../../Result.ts"
 import * as FindMyWay from "../../http/FindMyWay.ts"
 import * as McpSchema from "../McpSchema.ts"
 
+type CompletionContext = typeof McpSchema.Complete.payloadSchema.Type["context"]
+
 /** @internal */
 export interface ClientProfile {
   readonly protocolVersion: string
@@ -85,6 +87,19 @@ export interface ResourceTemplateDescriptor {
 /** @internal */
 export interface ResourceTemplateRegistration extends ResourceTemplateDescriptor {
   readonly routerPath: string
+  readonly completions: Readonly<
+    Record<
+      string,
+      (
+        input: string,
+        context: CompletionContext
+      ) => Effect.Effect<
+        McpSchema.CompleteResult,
+        McpSchema.InternalError,
+        McpSchema.McpServerClient
+      >
+    >
+  >
   readonly handle: (
     uri: string,
     params: Array<string>
@@ -111,9 +126,73 @@ export interface Resources {
 }
 
 /** @internal */
+export class PromptNotFound extends Data.TaggedError("PromptNotFound")<{
+  readonly name: string
+}> {}
+
+/** @internal */
+export interface PromptDescriptor {
+  readonly prompt: McpSchema.Prompt
+  readonly annotations: Context.Context<never>
+}
+
+/** @internal */
+export interface PromptRegistration extends PromptDescriptor {
+  readonly completions: Readonly<
+    Record<
+      string,
+      (
+        input: string,
+        context: CompletionContext
+      ) => Effect.Effect<
+        McpSchema.CompleteResult,
+        McpSchema.InternalError,
+        McpSchema.McpServerClient
+      >
+    >
+  >
+  readonly handle: (
+    params: Record<string, string>
+  ) => Effect.Effect<
+    McpSchema.GetPromptResult,
+    McpSchema.InternalError | McpSchema.InvalidParams,
+    McpSchema.McpServerClient
+  >
+}
+
+/** @internal */
+export interface Prompts {
+  readonly registrations: ReadonlyArray<PromptRegistration>
+  readonly register: (registration: PromptRegistration) => Effect.Effect<void>
+  readonly get: (
+    request: typeof McpSchema.GetPrompt.payloadSchema.Type
+  ) => Effect.Effect<
+    McpSchema.GetPromptResult,
+    PromptNotFound | McpSchema.InternalError | McpSchema.InvalidParams,
+    McpSchema.McpServerClient
+  >
+}
+
+/** @internal */
+export class CompletionNotFound extends Data.TaggedError("CompletionNotFound") {}
+
+/** @internal */
+export interface Completions {
+  readonly complete: (
+    request: typeof McpSchema.Complete.payloadSchema.Type
+  ) => Effect.Effect<
+    McpSchema.CompleteResult,
+    CompletionNotFound | McpSchema.InternalError,
+    McpSchema.McpServerClient
+  >
+}
+
+/** @internal */
 export interface McpCore {
   readonly tools: Tools
   readonly resources: Resources
+  readonly prompts: Prompts
+  readonly completions: Completions
 }
 
 const isVisible = (
@@ -166,6 +245,17 @@ export const listResourceTemplates = (
     Arr.map((registration) => registration.template)
   )
 
+/** @internal */
+export const listPrompts = (
+  registrations: ReadonlyArray<PromptDescriptor>,
+  client: ClientProfile | undefined
+): ReadonlyArray<McpSchema.Prompt> =>
+  pipe(
+    registrations,
+    Arr.filter((registration) => isVisible(registration, client)),
+    Arr.map((registration) => registration.prompt)
+  )
+
 // FindMyWay supports URI schemes at runtime, but its path type only describes slash-prefixed routes.
 const asRouterPath = (path: string): FindMyWay.PathInput => path as FindMyWay.PathInput
 
@@ -191,6 +281,23 @@ export const make: Effect.Effect<McpCore> = Effect.sync(() => {
   let resourceRouter = makeRouter(resourceRegistrations.values(), (registration) => registration.resource.uri)
   let templateRegistrations = new Map<string, ResourceTemplateRegistration>()
   let templateRouter = makeRouter(templateRegistrations.values(), (registration) => registration.routerPath)
+  let promptRegistrations = new Map<string, PromptRegistration>()
+  type CompletionHandler = (
+    input: string,
+    context: CompletionContext
+  ) => Effect.Effect<
+    McpSchema.CompleteResult,
+    McpSchema.InternalError,
+    McpSchema.McpServerClient
+  >
+  let promptCompletionRegistrations = new Map<
+    string,
+    ReadonlyMap<string, CompletionHandler>
+  >()
+  let resourceCompletionRegistrations = new Map<
+    string,
+    ReadonlyMap<string, CompletionHandler>
+  >()
 
   const tools: Tools = {
     get registrations() {
@@ -229,8 +336,16 @@ export const make: Effect.Effect<McpCore> = Effect.sync(() => {
         const nextRegistrations = new Map(templateRegistrations)
         nextRegistrations.set(registration.routerPath, registration)
         const nextRouter = makeRouter(nextRegistrations.values(), (registration) => registration.routerPath)
+        const nextCompletions = new Map<string, ReadonlyMap<string, CompletionHandler>>()
+        for (const current of nextRegistrations.values()) {
+          nextCompletions.set(
+            current.template.uriTemplate,
+            new Map(Object.entries(current.completions))
+          )
+        }
         templateRegistrations = nextRegistrations
         templateRouter = nextRouter
+        resourceCompletionRegistrations = nextCompletions
       }),
     read: Effect.fnUntraced(function*(uri) {
       const resource = resourceRouter.find("GET", uri)
@@ -249,5 +364,66 @@ export const make: Effect.Effect<McpCore> = Effect.sync(() => {
     })
   }
 
-  return { resources, tools }
+  const prompts: Prompts = {
+    get registrations() {
+      return Arr.fromIterable(promptRegistrations.values())
+    },
+    register: (registration) =>
+      Effect.sync(() => {
+        const nextRegistrations = new Map(promptRegistrations)
+        const nextCompletions = new Map(promptCompletionRegistrations)
+        nextRegistrations.set(registration.prompt.name, registration)
+        nextCompletions.set(
+          registration.prompt.name,
+          new Map(Object.entries(registration.completions))
+        )
+        promptRegistrations = nextRegistrations
+        promptCompletionRegistrations = nextCompletions
+      }),
+    get: Effect.fnUntraced(function*(request) {
+      const registration = promptRegistrations.get(request.name)
+      if (registration === undefined) {
+        return yield* new PromptNotFound({ name: request.name })
+      }
+      return yield* registration.handle(request.arguments ?? {})
+    })
+  }
+
+  const completions: Completions = {
+    complete: Effect.fnUntraced(function*(request) {
+      const complete = request.ref.type === "ref/resource"
+        ? resourceCompletionRegistrations.get(request.ref.uri)?.get(request.argument.name)
+        : promptCompletionRegistrations.get(request.ref.name)?.get(request.argument.name)
+      if (complete === undefined) {
+        return yield* new CompletionNotFound()
+      }
+      const result = yield* complete(request.argument.value, request.context)
+      const values = Arr.take(result.completion.values, 100)
+      if (values.length < result.completion.values.length) {
+        return McpSchema.CompleteResult.make({
+          completion: {
+            values,
+            total: result.completion.total,
+            hasMore: true
+          },
+          _meta: result._meta
+        })
+      }
+      return McpSchema.CompleteResult.make({
+        completion: result.completion.hasMore === undefined
+          ? {
+            values,
+            total: result.completion.total
+          }
+          : {
+            values,
+            total: result.completion.total,
+            hasMore: result.completion.hasMore
+          },
+        _meta: result._meta
+      })
+    })
+  }
+
+  return { completions, prompts, resources, tools }
 })

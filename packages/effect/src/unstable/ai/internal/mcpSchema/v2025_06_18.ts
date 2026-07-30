@@ -1,5 +1,5 @@
 /**
- * Exact MCP v2025-06-18 wire schemas for tools and resources.
+ * Exact MCP v2025-06-18 wire schemas for tools, resources, and prompts.
  *
  * @internal
  */
@@ -236,6 +236,89 @@ export const ContentBlock = Schema.Union([
   EmbeddedResource,
   ResourceLink
 ])
+
+export const PromptArgument = Schema.Struct({
+  name: Schema.String,
+  title: optional(Schema.String),
+  description: optional(Schema.String),
+  required: optional(Schema.Boolean)
+})
+
+export const Prompt = Schema.Struct({
+  name: Schema.String,
+  title: optional(Schema.String),
+  description: optional(Schema.String),
+  arguments: optional(Schema.Array(PromptArgument)),
+  _meta: optional(JsonObject)
+})
+
+export const PromptMessage = Schema.Struct({
+  role: Role,
+  content: ContentBlock
+})
+
+export const ListPromptsResult = Schema.Struct({
+  ...PaginatedResult.fields,
+  prompts: Schema.Array(Prompt)
+})
+
+export const GetPromptResult = Schema.Struct({
+  ...ResultMeta.fields,
+  description: optional(Schema.String),
+  messages: Schema.Array(PromptMessage)
+})
+
+export class ListPrompts extends Rpc.make("prompts/list", {
+  success: ListPromptsResult,
+  error: McpError,
+  payload: Schema.UndefinedOr(PaginatedRequest)
+}) {}
+
+export class GetPrompt extends Rpc.make("prompts/get", {
+  success: GetPromptResult,
+  error: McpError,
+  payload: {
+    ...RequestMeta.fields,
+    name: Schema.String,
+    arguments: optional(Schema.Record(Schema.String, Schema.String))
+  }
+}) {}
+
+export const PromptReference = Schema.Struct({
+  type: Schema.Literal("ref/prompt"),
+  name: Schema.String,
+  title: optional(Schema.String)
+})
+
+export const ResourceTemplateReference = Schema.Struct({
+  type: Schema.Literal("ref/resource"),
+  uri: Schema.String
+})
+
+export const CompleteResult = Schema.Struct({
+  ...ResultMeta.fields,
+  completion: Schema.Struct({
+    values: Schema.Array(Schema.String),
+    total: optional(Schema.Finite),
+    hasMore: optional(Schema.Boolean)
+  })
+})
+
+export class Complete extends Rpc.make("completion/complete", {
+  success: CompleteResult,
+  error: McpError,
+  payload: {
+    ...RequestMeta.fields,
+    ref: Schema.Union([PromptReference, ResourceTemplateReference]),
+    argument: Schema.Struct({
+      name: Schema.String,
+      value: Schema.String
+    }),
+    context: optional(Schema.Struct({
+      arguments: optional(Schema.Record(Schema.String, Schema.String))
+    }))
+  }
+}) {}
 
 export const ToolJsonSchema = Schema.StructWithRest(
   Schema.Struct({

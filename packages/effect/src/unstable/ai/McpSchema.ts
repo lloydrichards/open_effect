@@ -1917,6 +1917,7 @@ export class PromptReference extends Schema.Opaque<PromptReference>()(Schema.Str
  * @since 4.0.0
  */
 export class CompleteResult extends Schema.Opaque<CompleteResult>()(Schema.Struct({
+  ...ResultMeta.fields,
   completion: Schema.Struct({
     /**
      * An array of completion values. Must not exceed 100 items.
@@ -1926,7 +1927,7 @@ export class CompleteResult extends Schema.Opaque<CompleteResult>()(Schema.Struc
      * The total number of completion options available. This can exceed the
      * number of values actually sent in the response.
      */
-    total: optional(Schema.Int),
+    total: optional(Schema.Finite),
     /**
      * Indicates whether there are additional completion options beyond those
      * provided in the current response, even if the exact total is unknown.
@@ -1958,6 +1959,7 @@ export class Complete extends Rpc.make("completion/complete", {
   success: CompleteResult,
   error: McpError,
   payload: Schema.Struct({
+    ...RequestMeta.fields,
     ref: Schema.Union([PromptReference, ResourceReference]),
     /**
      * The argument's information

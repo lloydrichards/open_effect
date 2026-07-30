@@ -51,14 +51,12 @@ import {
   ClientRpcs,
   Elicit,
   ElicitationDeclined,
-  EnabledWhen,
   GetPromptResult,
   InternalError,
   INVALID_REQUEST_ERROR_CODE,
   InvalidParams,
   InvalidRequest,
   isParam,
-  ListPromptsResult,
   LoggingMessageNotification,
   McpErrorBase,
   McpServerClient,
@@ -196,21 +194,6 @@ export class McpServer extends Context.Service<McpServer, {
    */
   static readonly make = Effect.gen(function*() {
     const core = yield* McpCore.make
-    const prompts: Array<{
-      readonly prompt: Prompt
-      readonly annotations: Context.Context<never>
-    }> = []
-    const promptMap = new Map<
-      string,
-      (params: Record<string, string>) => Effect.Effect<GetPromptResult, InternalError | InvalidParams, McpServerClient>
-    >()
-    const completionsMap = new Map<
-      string,
-      (
-        input: string,
-        context: CompletionContext
-      ) => Effect.Effect<CompleteResult, InternalError, McpServerClient>
-    >()
     const notificationsQueue = yield* Queue.make<RpcMessage.Request<any>>()
     const listChangedHandles = new Map<string, any>()
     const notifications = yield* RpcClient.makeNoSerialization(ServerNotificationRpcs, {
@@ -285,21 +268,7 @@ export class McpServer extends Context.Service<McpServer, {
       }),
       addResourceTemplate: Effect.fnUntraced(
         function*({ annotations, completions, handle, routerPath, template }) {
-          const previous = core.resources.templateRegistrations.find(
-            (registration) => registration.routerPath === routerPath
-          )
-          yield* core.resources.registerTemplate({ annotations, handle, routerPath, template })
-          if (previous !== undefined) {
-            const prefix = `ref/resource/${previous.template.uriTemplate}/`
-            for (const key of completionsMap.keys()) {
-              if (key.startsWith(prefix)) {
-                completionsMap.delete(key)
-              }
-            }
-          }
-          for (const [param, handle] of Object.entries(completions)) {
-            completionsMap.set(`ref/resource/${template.uriTemplate}/${param}`, handle)
-          }
+          yield* core.resources.registerTemplate({ annotations, completions, handle, routerPath, template })
           yield* notifications.client["notifications/resources/list_changed"]({})
         }
       ),
@@ -311,44 +280,29 @@ export class McpServer extends Context.Service<McpServer, {
           )
         ),
       get prompts() {
-        return prompts
+        return Arr.map(
+          core.prompts.registrations,
+          ({ annotations, prompt }) => ({ annotations, prompt })
+        )
       },
-      addPrompt: (options) =>
-        Effect.suspend(() => {
-          prompts.push(options)
-          promptMap.set(options.prompt.name, options.handle)
-          for (const [param, handle] of Object.entries(options.completions)) {
-            completionsMap.set(`ref/prompt/${options.prompt.name}/${param}`, handle)
-          }
-          return notifications.client["notifications/prompts/list_changed"]({})
-        }),
-      getPromptResult: Effect.fnUntraced(function*({ arguments: params, name }) {
-        const handler = promptMap.get(name)
-        if (!handler) {
-          return yield* new InvalidParams({ message: `Prompt '${name}' not found` })
-        }
-        return yield* handler(params ?? {})
+      addPrompt: Effect.fnUntraced(function*(options) {
+        yield* core.prompts.register(options)
+        yield* notifications.client["notifications/prompts/list_changed"]({})
       }),
-      completion: Effect.fnUntraced(function*(complete) {
-        const ref = complete.ref
-        const key = ref.type === "ref/resource"
-          ? `ref/resource/${ref.uri}/${complete.argument.name}`
-          : `ref/prompt/${ref.name}/${complete.argument.name}`
-        const handler = completionsMap.get(key)
-        if (!handler) {
-          return yield* new InvalidParams({ message: "Unknown completion reference or argument" })
-        }
-        const result = yield* handler(complete.argument.value, complete.context)
-        const values = Arr.take(result.completion.values, 100)
-        return {
-          completion: {
-            ...result.completion,
-            values,
-            hasMore: result.completion.hasMore === true ||
-              values.length < result.completion.values.length
-          }
-        }
-      })
+      getPromptResult: (request) =>
+        core.prompts.get(request).pipe(
+          Effect.catchTag(
+            "PromptNotFound",
+            (error) => new InvalidParams({ message: `Prompt '${error.name}' not found` })
+          )
+        ),
+      completion: (request) =>
+        core.completions.complete(request).pipe(
+          Effect.catchTag(
+            "CompletionNotFound",
+            () => new InvalidParams({ message: "Unknown completion reference or argument" })
+          )
+        )
     })
   })
 
@@ -1884,7 +1838,10 @@ const CommonClientRpcs = ClientRpcs.omit(
   "tools/call",
   "resources/list",
   "resources/read",
-  "resources/templates/list"
+  "resources/templates/list",
+  "prompts/list",
+  "prompts/get",
+  "completion/complete"
 )
 
 const layerHandlers = (serverInfo: {
@@ -1955,8 +1912,6 @@ const layerHandlers = (serverInfo: {
               })
             })
           },
-          "completion/complete": (r) =>
-            server.completion(r),
           "logging/setLevel": ({ level }, { client, headers }) =>
             Effect.sync(() => {
               const session = getClientSession(options.sessions, client.id, headers)
@@ -1964,13 +1919,6 @@ const layerHandlers = (serverInfo: {
                 session.logLevel = { _tag: "Mcp", level }
               }
               return {}
-            }),
-          "prompts/get": (r) =>
-            server.getPromptResult(r),
-          "prompts/list": (_, { client, headers }) =>
-            Effect.sync(() => {
-              const initialized = getClientSession(options.sessions, client.id, headers)?.initializePayload
-              return new ListPromptsResult({ prompts: filterByClient(initialized, server.prompts, "prompt") })
             }),
           "resources/subscribe": ({ uri }, { client, headers }) =>
             Effect.gen(function*() {
@@ -2003,7 +1951,8 @@ const layerHandlers = (serverInfo: {
               return {}
             }),
           // Notifications
-          "notifications/cancelled": (_) => Effect.void,
+          "notifications/cancelled": (_) =>
+            Effect.void,
           "notifications/initialized": (_, { client, headers }) =>
             Effect.sync(() => {
               server.initializedClients.add(client.id)
@@ -2012,7 +1961,8 @@ const layerHandlers = (serverInfo: {
                 options.sessions.byClientId.set(client.id, session)
               }
             }),
-          "notifications/progress": (_) => Effect.void,
+          "notifications/progress": (_) =>
+            Effect.void,
           "notifications/roots/list_changed": (_) => Effect.void
         })
         yield* McpProtocolRegistry.installHandlers(
@@ -2027,7 +1977,10 @@ const layerHandlers = (serverInfo: {
           call: (request) => server.callTool(request),
           listResources: (profile) => McpCore.listResources(server.resources, profile),
           listResourceTemplates: (profile) => McpCore.listResourceTemplates(server.resourceTemplates, profile),
-          readResource: (uri) => server.findResource(uri)
+          readResource: (uri) => server.findResource(uri),
+          listPrompts: (profile) => McpCore.listPrompts(server.prompts, profile),
+          getPrompt: (request) => server.getPromptResult(request),
+          complete: (request) => server.completion(request)
         })
         yield* McpProtocolRegistry.installHandlers(
           options.protocolRegistry,
@@ -2061,30 +2014,6 @@ const resolveResourceContent = (
     }
   }
   return content
-}
-
-const filterByClient = <
-  A extends {
-    readonly annotations: Context.Context<never>
-  },
-  P extends keyof A
->(
-  client: typeof Initialize.payloadSchema.Type | undefined,
-  items: ReadonlyArray<A>,
-  prop: P
-): Array<A[P]> => {
-  if (!client) {
-    return items.map((item) => item[prop])
-  }
-  const out = Arr.empty<A[P]>()
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i]
-    const enabledWhen = Context.getOrUndefined(item.annotations, EnabledWhen)
-    if (!enabledWhen || enabledWhen(client)) {
-      out.push(item[prop])
-    }
-  }
-  return out
 }
 
 const getClientSession = (
