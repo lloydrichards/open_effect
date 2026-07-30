@@ -1,4 +1,5 @@
 import type * as Effect from "../../../Effect.ts"
+import type * as Headers from "../../http/Headers.ts"
 import type * as McpSchema from "../McpSchema.ts"
 import type * as McpCore from "./mcpCore.ts"
 
@@ -59,4 +60,31 @@ export interface CompletionRuntime {
 }
 
 /** @internal */
-export interface Runtime extends ToolRuntime, ResourceRuntime, PromptRuntime, CompletionRuntime {}
+export interface LifecycleRuntime {
+  readonly initialize: (
+    request: typeof McpSchema.Initialize.payloadSchema.Type,
+    clientId: number
+  ) => Effect.Effect<McpSchema.InitializeResult>
+  readonly setLogLevel: (
+    level: typeof McpSchema.LoggingLevel.Type,
+    clientId: number,
+    headers: Headers.Headers
+  ) => Effect.Effect<void>
+  readonly subscribe: (
+    uri: string,
+    clientId: number,
+    headers: Headers.Headers
+  ) => Effect.Effect<void, McpSchema.MethodNotFound>
+  readonly unsubscribe: (
+    uri: string,
+    clientId: number,
+    headers: Headers.Headers
+  ) => Effect.Effect<void, McpSchema.MethodNotFound>
+  readonly initialized: (
+    clientId: number,
+    headers: Headers.Headers
+  ) => Effect.Effect<void>
+}
+
+/** @internal */
+export interface Runtime extends ToolRuntime, ResourceRuntime, PromptRuntime, CompletionRuntime, LifecycleRuntime {}

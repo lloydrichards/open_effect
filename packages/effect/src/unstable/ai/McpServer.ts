@@ -47,8 +47,6 @@ import * as McpProtocolRegistry from "./internal/mcpProtocolRegistry.ts"
 import type * as McpProtocol from "./McpProtocol.ts"
 import {
   CallToolResult,
-  CancelledNotification,
-  ClientRpcs,
   Elicit,
   ElicitationDeclined,
   GetPromptResult,
@@ -317,9 +315,6 @@ export class McpServer extends Context.Service<McpServer, {
 const MCP_SESSION_ID_HEADER = "mcp-session-id"
 const MCP_PROTOCOL_VERSION_HEADER = "mcp-protocol-version"
 const MCP_INVALID_BATCH_METHOD = "invalid/json-rpc-batch"
-const decodeCancelledNotification = Schema.decodeUnknownEffect(
-  Schema.toCodecJson(CancelledNotification.payloadSchema)
-)
 
 const requestKey = (requestId: string | number): string => `${typeof requestId}:${requestId}`
 
@@ -597,8 +592,9 @@ const runWithProtocolState = Effect.fnUntraced(function*(options: {
                 return Effect.void
               }
               if (request.tag === "notifications/cancelled") {
-                return decodeCancelledNotification(request.payload).pipe(
-                  Effect.flatMap(({ requestId }) => {
+                return selectedProtocol.payloadCodecs(rpc).decode(request.payload).pipe(
+                  Effect.flatMap((payload) => {
+                    const requestId = (payload as { readonly requestId: string | number }).requestId
                     const requests = cancelledRequests.get(clientId) ?? new Set<string>()
                     requests.add(requestKey(requestId))
                     cancelledRequests.set(clientId, requests)
@@ -1833,17 +1829,6 @@ const compileUriTemplate = (segments: TemplateStringsArray, ...schemas: Readonly
   } as const
 }
 
-const CommonClientRpcs = ClientRpcs.omit(
-  "tools/list",
-  "tools/call",
-  "resources/list",
-  "resources/read",
-  "resources/templates/list",
-  "prompts/list",
-  "prompts/get",
-  "completion/complete"
-)
-
 const layerHandlers = (serverInfo: {
   readonly name: string
   readonly version: string
@@ -1860,10 +1845,16 @@ const layerHandlers = (serverInfo: {
 
       for (const protocol of options.protocolRegistry.protocols) {
         const selectedProtocol = protocol
-        const wireHandlers = CommonClientRpcs.of({
-          // Requests
-          ping: () => Effect.succeed({}),
-          initialize(params, { client }) {
+        const clientHandlers = protocol.makeClientHandlers({
+          list: (profile) => McpCore.listTools(server.tools, profile),
+          call: (request) => server.callTool(request),
+          listResources: (profile) => McpCore.listResources(server.resources, profile),
+          listResourceTemplates: (profile) => McpCore.listResourceTemplates(server.resourceTemplates, profile),
+          readResource: (uri) => server.findResource(uri),
+          listPrompts: (profile) => McpCore.listPrompts(server.prompts, profile),
+          getPrompt: (request) => server.getPromptResult(request),
+          complete: (request) => server.completion(request),
+          initialize(params, clientId) {
             const capabilities: Types.DeepMutable<typeof ServerCapabilities.Type> = {
               completions: {},
               logging: {}
@@ -1903,7 +1894,7 @@ const layerHandlers = (serverInfo: {
                     [MCP_PROTOCOL_VERSION_HEADER]: selectedProtocol.protocolVersion
                   })))
               } else {
-                options.sessions.byClientId.set(client.id, session)
+                options.sessions.byClientId.set(clientId, session)
               }
               return Effect.succeed({
                 capabilities,
@@ -1912,19 +1903,18 @@ const layerHandlers = (serverInfo: {
               })
             })
           },
-          "logging/setLevel": ({ level }, { client, headers }) =>
+          setLogLevel: (level, clientId, headers) =>
             Effect.sync(() => {
-              const session = getClientSession(options.sessions, client.id, headers)
+              const session = getClientSession(options.sessions, clientId, headers)
               if (session) {
                 session.logLevel = { _tag: "Mcp", level }
               }
-              return {}
             }),
-          "resources/subscribe": ({ uri }, { client, headers }) =>
+          subscribe: (uri, clientId, headers) =>
             Effect.gen(function*() {
               const subscriptions = getClientSession(
                 options.sessions,
-                client.id,
+                clientId,
                 headers
               )?.resourceSubscriptions
               if (subscriptions === undefined) {
@@ -1933,13 +1923,12 @@ const layerHandlers = (serverInfo: {
                 })
               }
               subscriptions.add(uri)
-              return {}
             }),
-          "resources/unsubscribe": ({ uri }, { client, headers }) =>
+          unsubscribe: (uri, clientId, headers) =>
             Effect.gen(function*() {
               const subscriptions = getClientSession(
                 options.sessions,
-                client.id,
+                clientId,
                 headers
               )?.resourceSubscriptions
               if (subscriptions === undefined) {
@@ -1948,39 +1937,15 @@ const layerHandlers = (serverInfo: {
                 })
               }
               subscriptions.delete(uri)
-              return {}
             }),
-          // Notifications
-          "notifications/cancelled": (_) =>
-            Effect.void,
-          "notifications/initialized": (_, { client, headers }) =>
+          initialized: (clientId, headers) =>
             Effect.sync(() => {
-              server.initializedClients.add(client.id)
-              const session = getClientSession(options.sessions, client.id, headers)
+              server.initializedClients.add(clientId)
+              const session = getClientSession(options.sessions, clientId, headers)
               if (session) {
-                options.sessions.byClientId.set(client.id, session)
+                options.sessions.byClientId.set(clientId, session)
               }
-            }),
-          "notifications/progress": (_) =>
-            Effect.void,
-          "notifications/roots/list_changed": (_) => Effect.void
-        })
-        yield* McpProtocolRegistry.installHandlers(
-          options.protocolRegistry,
-          selectedProtocol,
-          CommonClientRpcs,
-          wireHandlers,
-          contextMap
-        )
-        const clientHandlers = protocol.makeClientHandlers({
-          list: (profile) => McpCore.listTools(server.tools, profile),
-          call: (request) => server.callTool(request),
-          listResources: (profile) => McpCore.listResources(server.resources, profile),
-          listResourceTemplates: (profile) => McpCore.listResourceTemplates(server.resourceTemplates, profile),
-          readResource: (uri) => server.findResource(uri),
-          listPrompts: (profile) => McpCore.listPrompts(server.prompts, profile),
-          getPrompt: (request) => server.getPromptResult(request),
-          complete: (request) => server.completion(request)
+            })
         })
         yield* McpProtocolRegistry.installHandlers(
           options.protocolRegistry,

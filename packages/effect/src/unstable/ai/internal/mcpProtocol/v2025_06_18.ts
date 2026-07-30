@@ -1,3 +1,12 @@
+/**
+ * Protocol adapter for MCP revision 2025-06-18.
+ *
+ * Selects the dated schemas for client and server traffic and maps their wire
+ * representations to the canonical MCP runtime.
+ *
+ * @see https://modelcontextprotocol.io/specification/2025-06-18
+ * @internal
+ */
 import * as Effect from "../../../../Effect.ts"
 import * as Encoding from "../../../../Encoding.ts"
 import * as Match from "../../../../Match.ts"
@@ -28,18 +37,51 @@ const CompletionRpcs = RpcGroup.make(
   DatedMcpSchema.Complete
 ).middleware(McpSchema.McpServerClientMiddleware)
 
-const ClientHandlerRpcs = ToolRpcs.merge(ResourceRpcs).merge(PromptRpcs).merge(CompletionRpcs)
+const LifecycleRpcs = RpcGroup.make(
+  DatedMcpSchema.Ping,
+  DatedMcpSchema.Initialize,
+  DatedMcpSchema.SetLevel,
+  DatedMcpSchema.Subscribe,
+  DatedMcpSchema.Unsubscribe
+).middleware(McpSchema.McpServerClientMiddleware)
 
-const ClientRpcs = McpSchema.ClientRpcs.omit(
-  "tools/list",
-  "tools/call",
-  "resources/list",
-  "resources/read",
-  "resources/templates/list",
-  "prompts/list",
-  "prompts/get",
-  "completion/complete"
-).merge(ClientHandlerRpcs)
+const ClientNotificationRpcs = RpcGroup.make(
+  DatedMcpSchema.CancelledNotification,
+  DatedMcpSchema.ProgressNotification,
+  DatedMcpSchema.InitializedNotification,
+  DatedMcpSchema.RootsListChangedNotification
+)
+
+const ClientHandlerRpcs = LifecycleRpcs
+  .merge(ToolRpcs)
+  .merge(ResourceRpcs)
+  .merge(PromptRpcs)
+  .merge(CompletionRpcs)
+  .merge(ClientNotificationRpcs)
+
+const ClientRpcs = ClientHandlerRpcs
+
+const ServerNotificationRpcs = RpcGroup.make(
+  DatedMcpSchema.CancelledNotification,
+  DatedMcpSchema.ProgressNotification,
+  DatedMcpSchema.LoggingMessageNotification,
+  DatedMcpSchema.ResourceUpdatedNotification,
+  DatedMcpSchema.ResourceListChangedNotification,
+  DatedMcpSchema.ToolListChangedNotification,
+  DatedMcpSchema.PromptListChangedNotification
+)
+
+const ServerRequestRpcs = McpSchema.ServerRequestRpcs.omit(
+  "ping",
+  "roots/list",
+  "sampling/createMessage",
+  "elicitation/create"
+).merge(RpcGroup.make(
+  DatedMcpSchema.Ping,
+  DatedMcpSchema.ListRoots,
+  DatedMcpSchema.CreateMessage,
+  DatedMcpSchema.Elicit
+))
 
 const projectAnnotations = (
   annotations: McpSchema.Annotations | undefined
@@ -48,7 +90,8 @@ const projectAnnotations = (
     ? undefined
     : {
       audience: annotations.audience,
-      priority: annotations.priority
+      priority: annotations.priority,
+      lastModified: annotations.lastModified
     }
 
 const projectToolJsonSchema = Effect.fnUntraced(function*(
@@ -120,16 +163,18 @@ const projectContent: (
   })
 )
 
+/** @internal */
 export type ProtocolAdapter = InternalProtocolAdapter.ProtocolAdapter<
   McpProtocol.Runtime,
   "2025-06-18",
   RpcGroup.Rpcs<typeof ClientRpcs>,
-  RpcGroup.Rpcs<typeof McpSchema.ClientNotificationRpcs>,
-  RpcGroup.Rpcs<typeof McpSchema.ServerRequestRpcs>,
-  RpcGroup.Rpcs<typeof McpSchema.ServerNotificationRpcs>,
+  RpcGroup.Rpcs<typeof ClientNotificationRpcs>,
+  RpcGroup.Rpcs<typeof ServerRequestRpcs>,
+  RpcGroup.Rpcs<typeof ServerNotificationRpcs>,
   RpcGroup.Rpcs<typeof ClientHandlerRpcs>
 >
 
+/** @internal */
 export const v2025_06_18: ProtocolAdapter = InternalProtocolAdapter.make({
   protocolVersion: "2025-06-18",
   transport: {
@@ -137,12 +182,53 @@ export const v2025_06_18: ProtocolAdapter = InternalProtocolAdapter.make({
     requiresVersionHeader: true
   },
   clientRpcs: ClientRpcs,
-  clientNotificationRpcs: McpSchema.ClientNotificationRpcs,
-  serverRequestRpcs: McpSchema.ServerRequestRpcs,
-  serverNotificationRpcs: McpSchema.ServerNotificationRpcs,
+  clientNotificationRpcs: ClientNotificationRpcs,
+  serverRequestRpcs: ServerRequestRpcs,
+  serverNotificationRpcs: ServerNotificationRpcs,
   clientHandlerRpcs: ClientHandlerRpcs,
   makeClientHandlers: (runtime: McpProtocol.Runtime) =>
     ClientHandlerRpcs.of({
+      ping: () => Effect.succeed({}),
+      initialize: Effect.fnUntraced(function*(request, { client }) {
+        const extensions = request.capabilities.extensions
+        const result = yield* runtime.initialize({
+          protocolVersion: request.protocolVersion,
+          capabilities: new McpSchema.ClientCapabilities({
+            experimental: request.capabilities.experimental,
+            extensions: extensions !== undefined && Object.keys(extensions).every((key) => key.includes("/"))
+              ? extensions
+              : undefined,
+            roots: request.capabilities.roots,
+            sampling: request.capabilities.sampling,
+            elicitation: request.capabilities.elicitation
+          }),
+          clientInfo: {
+            name: request.clientInfo.name,
+            title: request.clientInfo.title,
+            version: request.clientInfo.version
+          },
+          _meta: request._meta
+        }, client.id as number)
+        return DatedMcpSchema.InitializeResult.make({
+          protocolVersion: "2025-06-18",
+          capabilities: {
+            experimental: result.capabilities.experimental,
+            extensions: result.capabilities.extensions,
+            logging: result.capabilities.logging,
+            completions: result.capabilities.completions,
+            prompts: result.capabilities.prompts,
+            resources: result.capabilities.resources,
+            tools: result.capabilities.tools
+          },
+          serverInfo: {
+            name: result.serverInfo.name,
+            title: result.serverInfo.title,
+            version: result.serverInfo.version
+          },
+          instructions: result.instructions,
+          _meta: result._meta
+        })
+      }),
       "tools/list": Effect.fnUntraced(function*() {
         const client = yield* McpSchema.McpServerClient
         const tools = yield* Effect.forEach(
@@ -395,6 +481,36 @@ export const v2025_06_18: ProtocolAdapter = InternalProtocolAdapter.make({
           },
           _meta: result._meta
         })
-      })
+      }),
+      "logging/setLevel": Effect.fnUntraced(function*(request, { client, headers }) {
+        yield* runtime.setLogLevel(request.level, client.id as number, headers)
+        return {}
+      }),
+      "resources/subscribe": Effect.fnUntraced(function*(request, { client, headers }) {
+        yield* runtime.subscribe(request.uri, client.id as number, headers).pipe(
+          Effect.mapError((error) =>
+            new DatedMcpSchema.MethodNotFound({
+              message: error.message,
+              data: error.data
+            })
+          )
+        )
+        return {}
+      }),
+      "resources/unsubscribe": Effect.fnUntraced(function*(request, { client, headers }) {
+        yield* runtime.unsubscribe(request.uri, client.id as number, headers).pipe(
+          Effect.mapError((error) =>
+            new DatedMcpSchema.MethodNotFound({
+              message: error.message,
+              data: error.data
+            })
+          )
+        )
+        return {}
+      }),
+      "notifications/cancelled": () => Effect.void,
+      "notifications/progress": () => Effect.void,
+      "notifications/initialized": (_, { client, headers }) => runtime.initialized(client.id as number, headers),
+      "notifications/roots/list_changed": () => Effect.void
     })
 })

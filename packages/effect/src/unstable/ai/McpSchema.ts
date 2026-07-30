@@ -343,7 +343,7 @@ export class ClientCapabilities extends Schema.Class<ClientCapabilities>(
   /**
    * Experimental, non-standard capabilities that the client supports.
    */
-  experimental: optional(Schema.Record(Schema.String, Schema.Struct({}))),
+  experimental: optional(Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Json))),
   /**
    * Optional extensions capabilities advertised by the client.
    * Keys are extension identifiers following <vendor-prefix>/<extension-name> (e.g. "io.modelcontextprotocol/ui").
@@ -361,11 +361,11 @@ export class ClientCapabilities extends Schema.Class<ClientCapabilities>(
   /**
    * Present if the client supports sampling from an LLM.
    */
-  sampling: optional(Schema.Struct({})),
+  sampling: optional(Schema.Record(Schema.String, Schema.Json)),
   /**
    * Present if the client supports elicitation from the server.
    */
-  elicitation: optional(Schema.Struct({}))
+  elicitation: optional(Schema.Record(Schema.String, Schema.Json))
 }) {}
 
 /**
@@ -388,7 +388,7 @@ export class ServerCapabilities extends Schema.Opaque<ServerCapabilities>()(Sche
   /**
    * Experimental, non-standard capabilities that the server supports.
    */
-  experimental: optional(Schema.Record(Schema.String, Schema.Struct({}))),
+  experimental: optional(Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Json))),
   /**
    * Optional extensions capabilities advertised by the server.
    * Keys are extension identifiers following <vendor-prefix>/<extension-name> (e.g. "io.modelcontextprotocol/ui").
@@ -397,11 +397,11 @@ export class ServerCapabilities extends Schema.Opaque<ServerCapabilities>()(Sche
   /**
    * Present if the server supports sending log messages to the client.
    */
-  logging: optional(Schema.Struct({})),
+  logging: optional(Schema.Record(Schema.String, Schema.Json)),
   /**
    * Present if the server supports argument autocompletion suggestions.
    */
-  completions: optional(Schema.Struct({})),
+  completions: optional(Schema.Record(Schema.String, Schema.Json)),
   /**
    * Present if the server offers any prompt templates.
    */
