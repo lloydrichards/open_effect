@@ -30,7 +30,6 @@ import * as Sink from "../../Sink.ts"
 import type { Stdio } from "../../Stdio.ts"
 import * as Stream from "../../Stream.ts"
 import type * as Types from "../../Types.ts"
-import * as FindMyWay from "../http/FindMyWay.ts"
 import * as Headers from "../http/Headers.ts"
 import { appendPreResponseHandlerUnsafe } from "../http/HttpEffect.ts"
 import * as HttpRouter from "../http/HttpRouter.ts"
@@ -43,6 +42,7 @@ import * as RpcMessage from "../rpc/RpcMessage.ts"
 import * as RpcSerialization from "../rpc/RpcSerialization.ts"
 import * as RpcServer from "../rpc/RpcServer.ts"
 import * as AiError from "./AiError.ts"
+import * as McpCore from "./internal/mcpCore.ts"
 import * as McpProtocolRegistry from "./internal/mcpProtocolRegistry.ts"
 import type * as McpProtocol from "./McpProtocol.ts"
 import {
@@ -198,38 +198,7 @@ export class McpServer extends Context.Service<McpServer, {
    * @since 4.0.0
    */
   static readonly make = Effect.gen(function*() {
-    const matcher = makeUriMatcher<
-      {
-        readonly _tag: "ResourceTemplate"
-        readonly handle: (
-          uri: string,
-          params: Array<string>
-        ) => Effect.Effect<
-          typeof ReadResourceResult.Type,
-          InternalError | InvalidParams,
-          McpServerClient
-        >
-      } | {
-        readonly _tag: "Resource"
-        readonly effect: Effect.Effect<typeof ReadResourceResult.Type, InternalError, McpServerClient>
-      }
-    >()
-    const tools = Arr.empty<{
-      readonly tool: McpTool
-      readonly annotations: Context.Context<never>
-    }>()
-    const toolMap = new Map<
-      string,
-      (payload: any) => Effect.Effect<CallToolResult, InternalError | InvalidParams, McpServerClient>
-    >()
-    const resources: Array<{
-      readonly resource: Resource
-      readonly annotations: Context.Context<never>
-    }> = []
-    const resourceTemplates: Array<{
-      readonly template: ResourceTemplate
-      readonly annotations: Context.Context<never>
-    }> = []
+    const core = yield* McpCore.make
     const prompts: Array<{
       readonly prompt: Prompt
       readonly annotations: Context.Context<never>
@@ -282,59 +251,68 @@ export class McpServer extends Context.Service<McpServer, {
       notificationsQueue,
       initializedClients: new Set(),
       get tools() {
-        return tools
+        return core.tools.registrations.map(({ annotations, tool }) => ({ annotations, tool }))
       },
-      addTool: (options) =>
-        Effect.suspend(() => {
-          tools.push(options)
-          toolMap.set(options.tool.name, options.handle)
-          return notifications.client["notifications/tools/list_changed"]({})
-        }),
-      callTool: (request) =>
-        Effect.suspend((): Effect.Effect<CallToolResult, InternalError | InvalidParams, McpServerClient> => {
-          const handle = toolMap.get(request.name)
-          if (!handle) {
-            return Effect.fail(new InvalidParams({ message: `Tool '${request.name}' not found` }))
-          }
-          return handle(request.arguments).pipe(
-            Effect.catchDefect(() => Effect.fail(new InternalError({ message: "Internal error" })))
-          )
-        }),
+      addTool: Effect.fnUntraced(function*(options) {
+        yield* core.tools.register(options)
+        yield* notifications.client["notifications/tools/list_changed"]({})
+      }),
+      callTool: Effect.fnUntraced(function*(request) {
+        const client = yield* McpServerClient
+        return yield* core.tools.call(request, {
+          ...client.initializePayload,
+          metadata: client.initializePayload._meta
+        }).pipe(
+          Effect.catchTag(
+            "ToolNotFound",
+            (error) => new InvalidParams({ message: `Tool '${error.name}' not found` })
+          ),
+          Effect.catchDefect(() => Effect.fail(new InternalError({ message: "Internal error" })))
+        )
+      }),
       get resources() {
-        return resources
+        return Arr.map(
+          core.resources.registrations,
+          ({ annotations, resource }) => ({ annotations, resource })
+        )
       },
       get resourceTemplates() {
-        return resourceTemplates
+        return Arr.map(
+          core.resources.templateRegistrations,
+          ({ annotations, template }) => ({ annotations, template })
+        )
       },
-      addResource: (options) =>
-        Effect.suspend(() => {
-          resources.push(options)
-          matcher.add(options.resource.uri, { _tag: "Resource", effect: options.handle })
-          return notifications.client["notifications/resources/list_changed"]({})
-        }),
-      addResourceTemplate: ({ annotations, completions, handle, routerPath, template }) =>
-        Effect.suspend(() => {
-          resourceTemplates.push({ template, annotations })
-          matcher.add(routerPath, { _tag: "ResourceTemplate", handle })
+      addResource: Effect.fnUntraced(function*(options) {
+        yield* core.resources.register(options)
+        yield* notifications.client["notifications/resources/list_changed"]({})
+      }),
+      addResourceTemplate: Effect.fnUntraced(
+        function*({ annotations, completions, handle, routerPath, template }) {
+          const previous = core.resources.templateRegistrations.find(
+            (registration) => registration.routerPath === routerPath
+          )
+          yield* core.resources.registerTemplate({ annotations, handle, routerPath, template })
+          if (previous !== undefined) {
+            const prefix = `ref/resource/${previous.template.uriTemplate}/`
+            for (const key of completionsMap.keys()) {
+              if (key.startsWith(prefix)) {
+                completionsMap.delete(key)
+              }
+            }
+          }
           for (const [param, handle] of Object.entries(completions)) {
             completionsMap.set(`ref/resource/${template.uriTemplate}/${param}`, handle)
           }
-          return notifications.client["notifications/resources/list_changed"]({})
-        }),
+          yield* notifications.client["notifications/resources/list_changed"]({})
+        }
+      ),
       findResource: (uri) =>
-        Effect.suspend(() => {
-          const match = matcher.find(uri)
-          if (!match) {
-            return Effect.fail(new McpErrorBase({ code: -32002, message: `Resource '${uri}' not found` }))
-          } else if (match.handler._tag === "Resource") {
-            return match.handler.effect
-          }
-          const params: Array<string> = []
-          for (const key of Object.keys(match.params)) {
-            params[Number(key)] = match.params[key]!
-          }
-          return match.handler.handle(uri, params)
-        }),
+        core.resources.read(uri).pipe(
+          Effect.catchTag(
+            "ResourceNotFound",
+            (error) => Effect.fail(new McpErrorBase({ code: -32002, message: `Resource '${error.uri}' not found` }))
+          )
+        ),
       get prompts() {
         return prompts
       },
@@ -1876,20 +1854,6 @@ export const clientCapabilities: Effect.Effect<
 // Internal
 // -----------------------------------------------------------------------------
 
-const makeUriMatcher = <A>() => {
-  const router = FindMyWay.make<A>({
-    ignoreTrailingSlash: true,
-    ignoreDuplicateSlashes: true,
-    caseSensitive: true
-  })
-  const add = (uri: string, value: A) => {
-    router.on("GET", uri as any, value)
-  }
-  const find = (uri: string) => router.find("GET", uri)
-
-  return { add, find } as const
-}
-
 const compileUriTemplate = (segments: TemplateStringsArray, ...schemas: ReadonlyArray<Schema.Constraint>) => {
   let routerPath = segments[0].replace(":", "::")
   let uriPath = segments[0]
@@ -2006,7 +1970,9 @@ const layerHandlers = (serverInfo: {
           "resources/list": (_, { client, headers }) =>
             Effect.sync(() => {
               const initialized = getClientSession(options.sessions, client.id, headers)?.initializePayload
-              return new ListResourcesResult({ resources: filterByClient(initialized, server.resources, "resource") })
+              return new ListResourcesResult({
+                resources: McpCore.listResources(server.resources, toCoreClientProfile(initialized))
+              })
             }),
           "resources/read": ({ uri }) => server.findResource(uri),
           "resources/subscribe": ({ uri }, { client, headers }) =>
@@ -2043,7 +2009,10 @@ const layerHandlers = (serverInfo: {
             Effect.sync(() => {
               const initialized = getClientSession(options.sessions, client.id, headers)?.initializePayload
               return new ListResourceTemplatesResult({
-                resourceTemplates: filterByClient(initialized, server.resourceTemplates, "template")
+                resourceTemplates: McpCore.listResourceTemplates(
+                  server.resourceTemplates,
+                  toCoreClientProfile(initialized)
+                )
               })
             }),
           "tools/call": (r) => server.callTool(r),
@@ -2051,7 +2020,15 @@ const layerHandlers = (serverInfo: {
             Effect.sync(() => {
               const initialized = getClientSession(options.sessions, client.id, headers)?.initializePayload
               return new ListToolsResult({
-                tools: filterByClient(initialized, server.tools, "tool")
+                tools: McpCore.listTools(
+                  server.tools,
+                  initialized ?
+                    ({
+                      ...initialized,
+                      metadata: initialized._meta
+                    }) :
+                    undefined
+                )
               })
             }),
 
@@ -2152,6 +2129,18 @@ const filterByClient = <
   }
   return out
 }
+
+const toCoreClientProfile = (
+  client: typeof Initialize.payloadSchema.Type | undefined
+): McpCore.ClientProfile | undefined =>
+  client === undefined
+    ? undefined
+    : {
+      protocolVersion: client.protocolVersion,
+      capabilities: client.capabilities,
+      clientInfo: client.clientInfo,
+      metadata: client._meta
+    }
 
 const getClientSession = (
   sessions: Sessions,
