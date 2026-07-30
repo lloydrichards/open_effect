@@ -1,0 +1,3 @@
+ancestorEntries = ["packages/effect/src/unstable/ai/McpServer.ts"]
+ourEntries = ["packages/effect/src/unstable/ai/McpServer.ts"]
+theirEntries = ["packages/effect/src/unstable/ai/McpServer.ts"]
