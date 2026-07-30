@@ -4,18 +4,18 @@ import * as Effect from "../../../Effect.ts"
 import type * as Rpc from "../../rpc/Rpc.ts"
 import type * as RpcGroup from "../../rpc/RpcGroup.ts"
 import type * as RpcMessage from "../../rpc/RpcMessage.ts"
-import type * as McpProtocol from "./mcpProtocol.ts"
+import type * as ProtocolAdapter from "./protocolAdapter.ts"
 
 type AnyRpcGroup = RpcGroup.RpcGroup<any>
 
-const prefix = (protocol: McpProtocol.AnyProtocolAdapter): string =>
+const prefix = (protocol: ProtocolAdapter.AnyProtocolAdapter): string =>
   `@effect/mcp/${encodeURIComponent(protocol.protocolVersion)}/`
 
 const asRpcGroup = (group: RpcGroup.Any): AnyRpcGroup => group as unknown as AnyRpcGroup
 
 /** @internal */
 export interface ProtocolRegistry<
-  Protocol extends McpProtocol.AnyProtocolAdapter = McpProtocol.AnyProtocolAdapter
+  Protocol extends ProtocolAdapter.AnyProtocolAdapter = ProtocolAdapter.AnyProtocolAdapter
 > {
   readonly protocols: NonEmptyReadonlyArray<Protocol>
   readonly clientRpcs: AnyRpcGroup
@@ -28,7 +28,7 @@ export interface ProtocolRegistry<
 
 /** @internal */
 export const make = Effect.fnUntraced(function*<
-  const Protocols extends NonEmptyReadonlyArray<McpProtocol.AnyProtocolAdapter>
+  const Protocols extends NonEmptyReadonlyArray<ProtocolAdapter.AnyProtocolAdapter>
 >(
   protocols: Protocols
 ) {
@@ -72,7 +72,7 @@ export const make = Effect.fnUntraced(function*<
 
 /** @internal */
 export const installHandlers = Effect.fnUntraced(function*<
-  Protocol extends McpProtocol.AnyProtocolAdapter,
+  Protocol extends ProtocolAdapter.AnyProtocolAdapter,
   ClientRpcs extends Rpc.Any
 >(
   registry: ProtocolRegistry<Protocol>,

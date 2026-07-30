@@ -4,7 +4,7 @@ import type * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
 import type * as Scope from "effect/Scope"
 import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai"
-import * as McpProtocolInternal from "effect/unstable/ai/internal/mcpProtocol"
+import * as ProtocolAdapter from "effect/unstable/ai/internal/protocolAdapter"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 import { describe, expect, it } from "tstyche"
@@ -61,7 +61,7 @@ describe("McpServer", () => {
         success: Schema.Struct({})
       })
 
-      expect(McpProtocolInternal.make).type.not.toBeCallableWith({
+      expect(ProtocolAdapter.make).type.not.toBeCallableWith({
         protocolVersion: "test",
         clientRpcs: RpcGroup.make(Request),
         clientNotificationRpcs: RpcGroup.make(Notification),
