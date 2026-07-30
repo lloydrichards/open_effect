@@ -59,8 +59,6 @@ import {
   InvalidRequest,
   isParam,
   ListPromptsResult,
-  ListResourcesResult,
-  ListResourceTemplatesResult,
   LoggingMessageNotification,
   McpErrorBase,
   McpServerClient,
@@ -1881,7 +1879,13 @@ const compileUriTemplate = (segments: TemplateStringsArray, ...schemas: Readonly
   } as const
 }
 
-const CommonClientRpcs = ClientRpcs.omit("tools/list", "tools/call")
+const CommonClientRpcs = ClientRpcs.omit(
+  "tools/list",
+  "tools/call",
+  "resources/list",
+  "resources/read",
+  "resources/templates/list"
+)
 
 const layerHandlers = (serverInfo: {
   readonly name: string
@@ -1968,14 +1972,6 @@ const layerHandlers = (serverInfo: {
               const initialized = getClientSession(options.sessions, client.id, headers)?.initializePayload
               return new ListPromptsResult({ prompts: filterByClient(initialized, server.prompts, "prompt") })
             }),
-          "resources/list": (_, { client, headers }) =>
-            Effect.sync(() => {
-              const initialized = getClientSession(options.sessions, client.id, headers)?.initializePayload
-              return new ListResourcesResult({
-                resources: McpCore.listResources(server.resources, toCoreClientProfile(initialized))
-              })
-            }),
-          "resources/read": ({ uri }) => server.findResource(uri),
           "resources/subscribe": ({ uri }, { client, headers }) =>
             Effect.gen(function*() {
               const subscriptions = getClientSession(
@@ -2006,16 +2002,6 @@ const layerHandlers = (serverInfo: {
               subscriptions.delete(uri)
               return {}
             }),
-          "resources/templates/list": (_, { client, headers }) =>
-            Effect.sync(() => {
-              const initialized = getClientSession(options.sessions, client.id, headers)?.initializePayload
-              return new ListResourceTemplatesResult({
-                resourceTemplates: McpCore.listResourceTemplates(
-                  server.resourceTemplates,
-                  toCoreClientProfile(initialized)
-                )
-              })
-            }),
           // Notifications
           "notifications/cancelled": (_) => Effect.void,
           "notifications/initialized": (_, { client, headers }) =>
@@ -2038,7 +2024,10 @@ const layerHandlers = (serverInfo: {
         )
         const clientHandlers = protocol.makeClientHandlers({
           list: (profile) => McpCore.listTools(server.tools, profile),
-          call: (request) => server.callTool(request)
+          call: (request) => server.callTool(request),
+          listResources: (profile) => McpCore.listResources(server.resources, profile),
+          listResourceTemplates: (profile) => McpCore.listResourceTemplates(server.resourceTemplates, profile),
+          readResource: (uri) => server.findResource(uri)
         })
         yield* McpProtocolRegistry.installHandlers(
           options.protocolRegistry,
@@ -2097,18 +2086,6 @@ const filterByClient = <
   }
   return out
 }
-
-const toCoreClientProfile = (
-  client: typeof Initialize.payloadSchema.Type | undefined
-): McpCore.ClientProfile | undefined =>
-  client === undefined
-    ? undefined
-    : {
-      protocolVersion: client.protocolVersion,
-      capabilities: client.capabilities,
-      clientInfo: client.clientInfo,
-      metadata: client._meta
-    }
 
 const getClientSession = (
   sessions: Sessions,

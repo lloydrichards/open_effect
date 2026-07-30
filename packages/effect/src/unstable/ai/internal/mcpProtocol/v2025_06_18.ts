@@ -5,22 +5,33 @@ import * as Schema from "../../../../Schema.ts"
 import * as RpcGroup from "../../../rpc/RpcGroup.ts"
 import * as McpSchema from "../../McpSchema.ts"
 import type * as McpProtocol from "../mcpProtocol.ts"
-import * as JuneSchema from "../mcpSchema/v2025_06_18.ts"
+import * as DatedMcpSchema from "../mcpSchema/v2025_06_18.ts"
 import * as InternalProtocolAdapter from "../protocolAdapter.ts"
 
 const ToolRpcs = RpcGroup.make(
-  JuneSchema.ListTools,
-  JuneSchema.CallTool
+  DatedMcpSchema.ListTools,
+  DatedMcpSchema.CallTool
 ).middleware(McpSchema.McpServerClientMiddleware)
+
+const ResourceRpcs = RpcGroup.make(
+  DatedMcpSchema.ListResources,
+  DatedMcpSchema.ReadResource,
+  DatedMcpSchema.ListResourceTemplates
+).middleware(McpSchema.McpServerClientMiddleware)
+
+const ClientHandlerRpcs = ToolRpcs.merge(ResourceRpcs)
 
 const ClientRpcs = McpSchema.ClientRpcs.omit(
   "tools/list",
-  "tools/call"
-).merge(ToolRpcs)
+  "tools/call",
+  "resources/list",
+  "resources/read",
+  "resources/templates/list"
+).merge(ClientHandlerRpcs)
 
 const projectAnnotations = (
   annotations: McpSchema.Annotations | undefined
-): typeof JuneSchema.Annotations.Type | undefined =>
+): typeof DatedMcpSchema.Annotations.Type | undefined =>
   annotations === undefined
     ? undefined
     : {
@@ -32,9 +43,9 @@ const projectToolJsonSchema = Effect.fnUntraced(function*(
   value: unknown,
   feature: string
 ) {
-  return yield* Schema.decodeUnknownEffect(JuneSchema.ToolJsonSchema)(value).pipe(
+  return yield* Schema.decodeUnknownEffect(DatedMcpSchema.ToolJsonSchema)(value).pipe(
     Effect.mapError(() =>
-      new JuneSchema.InternalError({
+      new DatedMcpSchema.InternalError({
         message: `MCP 2025-06-18 cannot represent ${feature}`
       })
     )
@@ -43,29 +54,29 @@ const projectToolJsonSchema = Effect.fnUntraced(function*(
 
 const projectContent: (
   content: typeof McpSchema.ContentBlock.Type
-) => typeof JuneSchema.ContentBlock.Type = Match.type<typeof McpSchema.ContentBlock.Type>().pipe(
+) => typeof DatedMcpSchema.ContentBlock.Type = Match.type<typeof McpSchema.ContentBlock.Type>().pipe(
   Match.discriminatorsExhaustive("type")({
-    text: (content): typeof JuneSchema.ContentBlock.Type => ({
+    text: (content): typeof DatedMcpSchema.ContentBlock.Type => ({
       type: "text",
       text: content.text,
       annotations: projectAnnotations(content.annotations),
       _meta: content._meta
     }),
-    image: (content): typeof JuneSchema.ContentBlock.Type => ({
+    image: (content): typeof DatedMcpSchema.ContentBlock.Type => ({
       type: "image",
       data: Encoding.encodeBase64(content.data),
       mimeType: content.mimeType,
       annotations: projectAnnotations(content.annotations),
       _meta: content._meta
     }),
-    audio: (content): typeof JuneSchema.ContentBlock.Type => ({
+    audio: (content): typeof DatedMcpSchema.ContentBlock.Type => ({
       type: "audio",
       data: Encoding.encodeBase64(content.data),
       mimeType: content.mimeType,
       annotations: projectAnnotations(content.annotations),
       _meta: content._meta
     }),
-    resource: (content): typeof JuneSchema.ContentBlock.Type => ({
+    resource: (content): typeof DatedMcpSchema.ContentBlock.Type => ({
       type: "resource",
       resource: "text" in content.resource
         ? {
@@ -83,7 +94,7 @@ const projectContent: (
       annotations: projectAnnotations(content.annotations),
       _meta: content._meta
     }),
-    resource_link: (content): typeof JuneSchema.ContentBlock.Type => ({
+    resource_link: (content): typeof DatedMcpSchema.ContentBlock.Type => ({
       type: "resource_link",
       uri: content.uri,
       name: content.name,
@@ -98,13 +109,13 @@ const projectContent: (
 )
 
 export type ProtocolAdapter = InternalProtocolAdapter.ProtocolAdapter<
-  McpProtocol.ToolRuntime,
+  McpProtocol.Runtime,
   "2025-06-18",
   RpcGroup.Rpcs<typeof ClientRpcs>,
   RpcGroup.Rpcs<typeof McpSchema.ClientNotificationRpcs>,
   RpcGroup.Rpcs<typeof McpSchema.ServerRequestRpcs>,
   RpcGroup.Rpcs<typeof McpSchema.ServerNotificationRpcs>,
-  RpcGroup.Rpcs<typeof ToolRpcs>
+  RpcGroup.Rpcs<typeof ClientHandlerRpcs>
 >
 
 export const v2025_06_18: ProtocolAdapter = InternalProtocolAdapter.make({
@@ -117,9 +128,9 @@ export const v2025_06_18: ProtocolAdapter = InternalProtocolAdapter.make({
   clientNotificationRpcs: McpSchema.ClientNotificationRpcs,
   serverRequestRpcs: McpSchema.ServerRequestRpcs,
   serverNotificationRpcs: McpSchema.ServerNotificationRpcs,
-  clientHandlerRpcs: ToolRpcs,
-  makeClientHandlers: (runtime: McpProtocol.ToolRuntime) =>
-    ToolRpcs.of({
+  clientHandlerRpcs: ClientHandlerRpcs,
+  makeClientHandlers: (runtime: McpProtocol.Runtime) =>
+    ClientHandlerRpcs.of({
       "tools/list": Effect.fnUntraced(function*() {
         const client = yield* McpSchema.McpServerClient
         const tools = yield* Effect.forEach(
@@ -140,7 +151,7 @@ export const v2025_06_18: ProtocolAdapter = InternalProtocolAdapter.make({
                 tool.outputSchema,
                 `output schema for tool ${tool.name}`
               )
-            return JuneSchema.Tool.make({
+            return DatedMcpSchema.Tool.make({
               name: tool.name,
               title: tool.title,
               description: tool.description,
@@ -159,7 +170,7 @@ export const v2025_06_18: ProtocolAdapter = InternalProtocolAdapter.make({
             })
           })
         )
-        return JuneSchema.ListToolsResult.make({
+        return DatedMcpSchema.ListToolsResult.make({
           tools
         })
       }),
@@ -171,11 +182,11 @@ export const v2025_06_18: ProtocolAdapter = InternalProtocolAdapter.make({
         }).pipe(
           Effect.mapError((error) =>
             error._tag === "InvalidParams"
-              ? new JuneSchema.InvalidParams({
+              ? new DatedMcpSchema.InvalidParams({
                 message: error.message,
                 data: error.data
               })
-              : new JuneSchema.InternalError({
+              : new DatedMcpSchema.InternalError({
                 message: error.message,
                 data: error.data
               })
@@ -186,15 +197,97 @@ export const v2025_06_18: ProtocolAdapter = InternalProtocolAdapter.make({
           structuredContent !== undefined &&
           !Schema.is(Schema.Record(Schema.String, Schema.Json))(structuredContent)
         ) {
-          return yield* new JuneSchema.InternalError({
+          return yield* new DatedMcpSchema.InternalError({
             message: "MCP 2025-06-18 cannot represent non-object structured tool content"
           })
         }
-        return JuneSchema.CallToolResult.make({
+        return DatedMcpSchema.CallToolResult.make({
           content: result.content.map(projectContent),
           structuredContent,
           isError: result.isError,
           _meta: result._meta
+        })
+      }),
+      "resources/list": Effect.fnUntraced(function*() {
+        const client = yield* McpSchema.McpServerClient
+        return DatedMcpSchema.ListResourcesResult.make({
+          resources: runtime.listResources({
+            protocolVersion: client.initializePayload.protocolVersion,
+            capabilities: client.initializePayload.capabilities,
+            clientInfo: client.initializePayload.clientInfo,
+            metadata: client.initializePayload._meta
+          }).map((resource) =>
+            DatedMcpSchema.Resource.make({
+              uri: resource.uri,
+              name: resource.name,
+              title: resource.title,
+              description: resource.description,
+              mimeType: resource.mimeType,
+              annotations: projectAnnotations(resource.annotations),
+              size: resource.size,
+              _meta: resource._meta
+            })
+          )
+        })
+      }),
+      "resources/read": Effect.fnUntraced(function*(request) {
+        const result = yield* runtime.readResource(request.uri).pipe(
+          Effect.mapError((error) =>
+            "_tag" in error
+              ? error._tag === "InvalidParams"
+                ? new DatedMcpSchema.InvalidParams({
+                  message: error.message,
+                  data: error.data
+                })
+                : new DatedMcpSchema.InternalError({
+                  message: error.message,
+                  data: error.data
+                })
+              : {
+                code: error.code,
+                message: error.message,
+                data: error.data
+              }
+          )
+        )
+        return DatedMcpSchema.ReadResourceResult.make({
+          contents: result.contents.map((content) =>
+            "text" in content
+              ? {
+                uri: content.uri,
+                mimeType: content.mimeType,
+                _meta: content._meta,
+                text: content.text
+              }
+              : {
+                uri: content.uri,
+                mimeType: content.mimeType,
+                _meta: content._meta,
+                blob: Encoding.encodeBase64(content.blob)
+              }
+          ),
+          _meta: result._meta
+        })
+      }),
+      "resources/templates/list": Effect.fnUntraced(function*() {
+        const client = yield* McpSchema.McpServerClient
+        return DatedMcpSchema.ListResourceTemplatesResult.make({
+          resourceTemplates: runtime.listResourceTemplates({
+            protocolVersion: client.initializePayload.protocolVersion,
+            capabilities: client.initializePayload.capabilities,
+            clientInfo: client.initializePayload.clientInfo,
+            metadata: client.initializePayload._meta
+          }).map((template) =>
+            DatedMcpSchema.ResourceTemplate.make({
+              uriTemplate: template.uriTemplate,
+              name: template.name,
+              title: template.title,
+              description: template.description,
+              mimeType: template.mimeType,
+              annotations: projectAnnotations(template.annotations),
+              _meta: template._meta
+            })
+          )
         })
       })
     })

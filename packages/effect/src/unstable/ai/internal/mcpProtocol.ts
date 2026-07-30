@@ -15,3 +15,23 @@ export interface ToolRuntime {
     McpSchema.McpServerClient
   >
 }
+
+/** @internal */
+export interface ResourceRuntime {
+  readonly listResources: (
+    profile: McpCore.ClientProfile | undefined
+  ) => ReadonlyArray<McpSchema.Resource>
+  readonly listResourceTemplates: (
+    profile: McpCore.ClientProfile | undefined
+  ) => ReadonlyArray<McpSchema.ResourceTemplate>
+  readonly readResource: (
+    uri: string
+  ) => Effect.Effect<
+    typeof McpSchema.ReadResourceResult.Type,
+    McpSchema.McpErrorBase | McpSchema.InvalidParams | McpSchema.InternalError,
+    McpSchema.McpServerClient
+  >
+}
+
+/** @internal */
+export interface Runtime extends ToolRuntime, ResourceRuntime {}

@@ -1,5 +1,5 @@
 /**
- * Exact MCP v2025-06-18 wire schemas required by tools/list and tools/call.
+ * Exact MCP v2025-06-18 wire schemas for tools and resources.
  *
  * @internal
  */
@@ -130,6 +130,16 @@ export const Resource = Schema.Struct({
   _meta: optional(JsonObject)
 })
 
+export const ResourceTemplate = Schema.Struct({
+  uriTemplate: Schema.String,
+  name: Schema.String,
+  title: optional(Schema.String),
+  description: optional(Schema.String),
+  mimeType: optional(Schema.String),
+  annotations: optional(Annotations),
+  _meta: optional(JsonObject)
+})
+
 const ResourceContentsBase = Schema.Struct({
   uri: Schema.String,
   mimeType: optional(Schema.String),
@@ -147,6 +157,42 @@ export const BlobResourceContents = Schema.Struct({
 })
 
 export const ResourceContents = Schema.Union([TextResourceContents, BlobResourceContents])
+
+export const ListResourcesResult = Schema.Struct({
+  ...PaginatedResult.fields,
+  resources: Schema.Array(Resource)
+})
+
+export const ListResourceTemplatesResult = Schema.Struct({
+  ...PaginatedResult.fields,
+  resourceTemplates: Schema.Array(ResourceTemplate)
+})
+
+export const ReadResourceResult = Schema.Struct({
+  ...ResultMeta.fields,
+  contents: Schema.Array(ResourceContents)
+})
+
+export class ListResources extends Rpc.make("resources/list", {
+  success: ListResourcesResult,
+  error: McpError,
+  payload: Schema.UndefinedOr(PaginatedRequest)
+}) {}
+
+export class ListResourceTemplates extends Rpc.make("resources/templates/list", {
+  success: ListResourceTemplatesResult,
+  error: McpError,
+  payload: Schema.UndefinedOr(PaginatedRequest)
+}) {}
+
+export class ReadResource extends Rpc.make("resources/read", {
+  success: ReadResourceResult,
+  error: McpError,
+  payload: {
+    ...RequestMeta.fields,
+    uri: Schema.String
+  }
+}) {}
 
 export const EmbeddedResource = Schema.Struct({
   type: Schema.Literal("resource"),
