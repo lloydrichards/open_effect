@@ -1,6 +1,7 @@
 import type { NonEmptyReadonlyArray } from "../../../Array.ts"
 import * as Cause from "../../../Cause.ts"
 import * as Effect from "../../../Effect.ts"
+import type * as Rpc from "../../rpc/Rpc.ts"
 import type * as RpcGroup from "../../rpc/RpcGroup.ts"
 import type * as RpcMessage from "../../rpc/RpcMessage.ts"
 import type * as McpProtocol from "./mcpProtocol.ts"
@@ -68,3 +69,74 @@ export const make = Effect.fnUntraced(function*<
     })
   } satisfies ProtocolRegistry<Protocol>
 })
+
+/** @internal */
+export const installHandlers = Effect.fnUntraced(function*<
+  Protocol extends McpProtocol.AnyProtocolAdapter,
+  ClientRpcs extends Rpc.Any
+>(
+  registry: ProtocolRegistry<Protocol>,
+  protocol: Protocol,
+  clientRpcs: RpcGroup.RpcGroup<ClientRpcs>,
+  handlers: RpcGroup.HandlersFrom<ClientRpcs>,
+  contextMap: Map<string, unknown>
+) {
+  const handlerContext = yield* clientRpcs.toHandlers(handlers)
+  const entries: Array<readonly [string, unknown]> = []
+  for (const rpcDefinition of clientRpcs.requests.values()) {
+    const protocolRpc = asRpcGroup(protocol.clientRpcs).requests.get(rpcDefinition._tag)
+    if (protocolRpc === undefined || !hasSameHandlerContract(rpcDefinition, protocolRpc)) {
+      return yield* Effect.die(`MCP handler contract does not match ${rpcDefinition._tag}`)
+    }
+    const routed = registry.routeClientRequest(protocol, {
+      _tag: "Request",
+      id: 0,
+      tag: rpcDefinition._tag,
+      payload: undefined,
+      headers: []
+    })
+    const namespacedRpc = registry.clientRpcs.requests.get(routed.tag)
+    const handler = handlerContext.mapUnsafe.get(rpcDefinition.key)
+    if (namespacedRpc === undefined || handler === undefined) {
+      return yield* Effect.die(`MCP handler registration invariant failed for ${routed.tag}`)
+    }
+    if (contextMap.has(namespacedRpc.key)) {
+      return yield* Effect.die(`MCP handler already registered for ${routed.tag}`)
+    }
+    entries.push([namespacedRpc.key, handler])
+  }
+  for (const [key, handler] of entries) {
+    contextMap.set(key, handler)
+  }
+})
+
+const hasSameHandlerContract = (
+  first: Rpc.Any,
+  second: Rpc.Any
+): boolean => {
+  if (!hasHandlerContract(first) || !hasHandlerContract(second)) {
+    return false
+  }
+  return first.payloadSchema === second.payloadSchema &&
+    first.successSchema === second.successSchema &&
+    first.errorSchema === second.errorSchema &&
+    first.defectSchema === second.defectSchema &&
+    first.middlewares.size === second.middlewares.size &&
+    Array.from(first.middlewares).every((middleware) => second.middlewares.has(middleware))
+}
+
+const hasHandlerContract = (
+  rpc: Rpc.Any
+): rpc is Rpc.Any & {
+  readonly payloadSchema: unknown
+  readonly successSchema: unknown
+  readonly errorSchema: unknown
+  readonly defectSchema: unknown
+  readonly middlewares: ReadonlySet<unknown>
+} =>
+  "payloadSchema" in rpc &&
+  "successSchema" in rpc &&
+  "errorSchema" in rpc &&
+  "defectSchema" in rpc &&
+  "middlewares" in rpc &&
+  rpc.middlewares instanceof Set

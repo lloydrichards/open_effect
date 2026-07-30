@@ -238,7 +238,8 @@ export type ProtocolAdapter = Internal.ProtocolAdapter<
   RpcGroup.Rpcs<typeof ClientRpcs>,
   RpcGroup.Rpcs<typeof McpSchema.ClientNotificationRpcs>,
   RpcGroup.Rpcs<typeof McpSchema.ServerRequestRpcs>,
-  RpcGroup.Rpcs<typeof McpSchema.ServerNotificationRpcs>
+  RpcGroup.Rpcs<typeof McpSchema.ServerNotificationRpcs>,
+  RpcGroup.Rpcs<typeof ToolRpcs>
 >
 
 /**

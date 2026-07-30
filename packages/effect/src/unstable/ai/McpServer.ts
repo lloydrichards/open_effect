@@ -61,7 +61,6 @@ import {
   ListPromptsResult,
   ListResourcesResult,
   ListResourceTemplatesResult,
-  ListToolsResult,
   LoggingMessageNotification,
   McpErrorBase,
   McpServerClient,
@@ -1882,6 +1881,8 @@ const compileUriTemplate = (segments: TemplateStringsArray, ...schemas: Readonly
   } as const
 }
 
+const CommonClientRpcs = ClientRpcs.omit("tools/list", "tools/call")
+
 const layerHandlers = (serverInfo: {
   readonly name: string
   readonly version: string
@@ -1898,7 +1899,7 @@ const layerHandlers = (serverInfo: {
 
       for (const protocol of options.protocolRegistry.protocols) {
         const selectedProtocol = protocol
-        const wireHandlers = ClientRpcs.of({
+        const wireHandlers = CommonClientRpcs.of({
           // Requests
           ping: () => Effect.succeed({}),
           initialize(params, { client }) {
@@ -2015,23 +2016,6 @@ const layerHandlers = (serverInfo: {
                 )
               })
             }),
-          "tools/call": (r) => server.callTool(r),
-          "tools/list": (_, { client, headers }) =>
-            Effect.sync(() => {
-              const initialized = getClientSession(options.sessions, client.id, headers)?.initializePayload
-              return new ListToolsResult({
-                tools: McpCore.listTools(
-                  server.tools,
-                  initialized ?
-                    ({
-                      ...initialized,
-                      metadata: initialized._meta
-                    }) :
-                    undefined
-                )
-              })
-            }),
-
           // Notifications
           "notifications/cancelled": (_) => Effect.void,
           "notifications/initialized": (_, { client, headers }) =>
@@ -2045,44 +2029,28 @@ const layerHandlers = (serverInfo: {
           "notifications/progress": (_) => Effect.void,
           "notifications/roots/list_changed": (_) => Effect.void
         })
-        yield* addProtocolHandlers(
+        yield* McpProtocolRegistry.installHandlers(
           options.protocolRegistry,
           selectedProtocol,
-          selectedProtocol.clientRpcs,
+          CommonClientRpcs,
           wireHandlers,
+          contextMap
+        )
+        const clientHandlers = protocol.makeClientHandlers({
+          list: (profile) => McpCore.listTools(server.tools, profile),
+          call: (request) => server.callTool(request)
+        })
+        yield* McpProtocolRegistry.installHandlers(
+          options.protocolRegistry,
+          selectedProtocol,
+          protocol.clientHandlerRpcs,
+          clientHandlers,
           contextMap
         )
       }
       return Context.makeUnsafe(contextMap)
     })
   )
-
-const addProtocolHandlers = Effect.fnUntraced(function*<
-  ClientRpcs extends Rpc.Any
->(
-  registry: McpProtocolRegistry.ProtocolRegistry<McpProtocol.ProtocolAdapter>,
-  protocol: McpProtocol.ProtocolAdapter,
-  clientRpcs: RpcGroup.RpcGroup<ClientRpcs>,
-  handlers: RpcGroup.HandlersFrom<ClientRpcs>,
-  contextMap: Map<string, unknown>
-) {
-  const handlerContext = yield* clientRpcs.toHandlers(handlers)
-  for (const rpcDefinition of clientRpcs.requests.values()) {
-    const routed = registry.routeClientRequest(protocol, {
-      _tag: "Request",
-      id: 0,
-      tag: rpcDefinition._tag,
-      payload: undefined,
-      headers: []
-    })
-    const namespacedRpc = registry.clientRpcs.requests.get(routed.tag)
-    const handler = handlerContext.mapUnsafe.get(rpcDefinition.key)
-    if (namespacedRpc === undefined || handler === undefined) {
-      return yield* Effect.die(`MCP handler registration invariant failed for ${routed.tag}`)
-    }
-    contextMap.set(namespacedRpc.key, handler)
-  }
-})
 
 const resolveResourceContent = (
   uri: string,

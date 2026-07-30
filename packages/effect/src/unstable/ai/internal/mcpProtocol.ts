@@ -2,10 +2,26 @@ import type * as Effect from "../../../Effect.ts"
 import * as Schema from "../../../Schema.ts"
 import type * as Rpc from "../../rpc/Rpc.ts"
 import type * as RpcGroup from "../../rpc/RpcGroup.ts"
+import type * as McpSchema from "../McpSchema.ts"
+import type * as McpCore from "./mcpCore.ts"
 
 export interface PayloadCodecs {
   readonly decode: (input: unknown) => Effect.Effect<unknown, Schema.SchemaError>
   readonly encode: (input: unknown) => Effect.Effect<unknown, Schema.SchemaError>
+}
+
+/** @internal */
+export interface ToolRuntime {
+  readonly list: (
+    profile: McpCore.ClientProfile | undefined
+  ) => ReadonlyArray<McpSchema.Tool>
+  readonly call: (
+    request: typeof McpSchema.CallTool.payloadSchema.Type
+  ) => Effect.Effect<
+    McpSchema.CallToolResult,
+    McpSchema.InternalError | McpSchema.InvalidParams,
+    McpSchema.McpServerClient
+  >
 }
 
 /** @internal */
@@ -27,7 +43,8 @@ export interface ProtocolAdapter<
   ClientRpcs extends Rpc.Any = Rpc.Any,
   ClientNotificationRpcs extends ClientRpcs = ClientRpcs,
   ServerRequestRpcs extends Rpc.Any = Rpc.Any,
-  ServerNotificationRpcs extends Rpc.Any = Rpc.Any
+  ServerNotificationRpcs extends Rpc.Any = Rpc.Any,
+  ClientHandlerRpcs extends ClientRpcs = never
 > {
   readonly protocolVersion: Version
   readonly transport: {
@@ -38,6 +55,10 @@ export interface ProtocolAdapter<
   readonly clientNotificationRpcs: RpcGroup.RpcGroup<ClientNotificationRpcs>
   readonly serverRequestRpcs: RpcGroup.RpcGroup<ServerRequestRpcs>
   readonly serverNotificationRpcs: RpcGroup.RpcGroup<ServerNotificationRpcs>
+  readonly clientHandlerRpcs: RpcGroup.RpcGroup<ClientHandlerRpcs>
+  readonly makeClientHandlers: (
+    runtime: ToolRuntime
+  ) => RpcGroup.HandlersFrom<ClientHandlerRpcs>
   readonly payloadCodecs: (rpc: Rpc.AnyWithProps) => PayloadCodecs
 }
 
@@ -47,7 +68,8 @@ export const make = <
   ClientRpcs extends Rpc.Any,
   ClientNotificationRpcs extends ClientRpcs,
   ServerRequestRpcs extends Rpc.Any,
-  ServerNotificationRpcs extends Rpc.Any
+  ServerNotificationRpcs extends Rpc.Any,
+  ClientHandlerRpcs extends ClientRpcs
 >(options: {
   readonly protocolVersion: Version
   readonly transport: {
@@ -58,12 +80,17 @@ export const make = <
   readonly clientNotificationRpcs: RpcGroup.RpcGroup<ClientNotificationRpcs>
   readonly serverRequestRpcs: RpcGroup.RpcGroup<ServerRequestRpcs>
   readonly serverNotificationRpcs: RpcGroup.RpcGroup<ServerNotificationRpcs>
+  readonly clientHandlerRpcs: RpcGroup.RpcGroup<ClientHandlerRpcs>
+  readonly makeClientHandlers: (
+    runtime: ToolRuntime
+  ) => RpcGroup.HandlersFrom<ClientHandlerRpcs>
 }): ProtocolAdapter<
   Version,
   ClientRpcs,
   ClientNotificationRpcs,
   ServerRequestRpcs,
-  ServerNotificationRpcs
+  ServerNotificationRpcs,
+  ClientHandlerRpcs
 > => {
   const payloadCodecsCache = new WeakMap<Rpc.AnyWithProps, PayloadCodecs>()
   const payloadCodecs = (rpc: Rpc.AnyWithProps): PayloadCodecs => {
