@@ -39,7 +39,7 @@ const request = {
 } as const
 
 const runElicitation = <S extends Schema.ConstraintEncoder<Record<string, unknown>, unknown>>(
-  client: McpTestPeer["client"],
+  client: McpTestPeer["reverseClient"],
   protocolVersion: McpProtocol.ProtocolVersion,
   schema: S
 ) =>
@@ -84,7 +84,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
               }
             })
 
-            yield* peer.client["elicitation/create"](request)
+            yield* peer.wireClient["elicitation/create"](request)
 
             assert.strictEqual((yield* peer.takeRequest).method, "elicitation/create")
           }).pipe(Effect.scoped))
@@ -105,7 +105,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
               }
             })
 
-            const result = yield* peer.client["elicitation/create"](request)
+            const result = yield* peer.wireClient["elicitation/create"](request)
             const recorded = yield* peer.takeRequest
             const payload = yield* decodeElicitationRequest(recorded.payload)
 
@@ -136,7 +136,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
             })
 
             const result = yield* runElicitation(
-              peer.client,
+              peer.reverseClient,
               protocol.protocolVersion,
               Schema.Struct({
                 name: Schema.String,
@@ -158,7 +158,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
             })
 
             const error = yield* runElicitation(
-              peer.client,
+              peer.reverseClient,
               protocol.protocolVersion,
               Schema.Struct({ name: Schema.String })
             ).pipe(Effect.flip)
@@ -177,7 +177,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
             })
 
             const exit = yield* Effect.exit(runElicitation(
-              peer.client,
+              peer.reverseClient,
               protocol.protocolVersion,
               Schema.Struct({ name: Schema.String })
             ))
@@ -203,7 +203,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
             })
 
             const exit = yield* Effect.exit(runElicitation(
-              peer.client,
+              peer.reverseClient,
               protocol.protocolVersion,
               Schema.Struct({ name: Schema.String })
             ))

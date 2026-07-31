@@ -84,7 +84,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
               }
             })
 
-            yield* peer.client["sampling/createMessage"](samplingRequest)
+            yield* peer.wireClient["sampling/createMessage"](samplingRequest)
 
             assert.strictEqual((yield* peer.takeRequest).method, "sampling/createMessage")
           }).pipe(Effect.scoped))
@@ -101,7 +101,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
               }
             })
 
-            yield* peer.client["sampling/createMessage"](samplingRequestWithOptions)
+            yield* peer.wireClient["sampling/createMessage"](samplingRequestWithOptions)
             const recorded = yield* peer.takeRequest
             const payload = yield* decodeSamplingRequest(recorded.payload)
 
@@ -138,7 +138,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
               }
             })
 
-            const result = yield* peer.client["sampling/createMessage"](samplingRequest).pipe(
+            const result = yield* peer.wireClient["sampling/createMessage"](samplingRequest).pipe(
               Effect.flatMap(decodeSamplingResult)
             )
 
@@ -170,7 +170,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
               }
             })
 
-            const result = yield* peer.client["sampling/createMessage"](samplingRequest).pipe(
+            const result = yield* peer.wireClient["sampling/createMessage"](samplingRequest).pipe(
               Effect.flatMap(decodeSamplingResult)
             )
 
@@ -200,7 +200,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
               }
             })
 
-            const result = yield* peer.client["sampling/createMessage"](samplingRequest).pipe(
+            const result = yield* peer.wireClient["sampling/createMessage"](samplingRequest).pipe(
               Effect.flatMap(decodeSamplingResult)
             )
 
@@ -226,9 +226,10 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
               }
             })
 
-            const error = yield* peer.client["sampling/createMessage"](samplingRequest).pipe(Effect.flip)
+            const error = yield* peer.wireClient["sampling/createMessage"](samplingRequest).pipe(Effect.flip)
 
-            assert.instanceOf(error, McpSchema.InternalError)
+            assert.strictEqual(error._tag, "InternalError")
+            assert.strictEqual(error.code, -32603)
             assert.strictEqual(error.message, "Sampling failed")
           }).pipe(Effect.scoped))
       })

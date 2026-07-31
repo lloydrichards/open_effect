@@ -29,10 +29,11 @@ export interface McpTestPeerOptions {
 }
 
 export interface McpTestPeer {
-  readonly client: RpcClient.RpcClient<
+  readonly wireClient: RpcClient.RpcClient<
     RpcGroup.Rpcs<typeof McpSchema.ServerRequestRpcs>,
     RpcClientError.RpcClientError
   >
+  readonly reverseClient: McpSchema.McpReverseClient
   readonly requests: Effect.Effect<ReadonlyArray<RecordedRequest>>
   readonly takeRequest: Effect.Effect<RecordedRequest>
 }
@@ -41,7 +42,7 @@ const isReverseMethod = (method: string): method is ReverseMethod =>
   ["roots/list", "sampling/createMessage", "elicitation/create"].includes(method)
 
 export const makeMcpTestPeer = Effect.fn("McpTestPeer.make")(function*(
-  _protocol: McpProtocol.ProtocolAdapter,
+  protocol: McpProtocol.ProtocolAdapter,
   options: McpTestPeerOptions = {}
 ) {
   const requests = yield* Ref.make<ReadonlyArray<RecordedRequest>>([])
@@ -108,12 +109,14 @@ export const makeMcpTestPeer = Effect.fn("McpTestPeer.make")(function*(
     })
   )
 
-  const client = yield* RpcClient.make(McpSchema.ServerRequestRpcs).pipe(
+  const wireClient = yield* RpcClient.make(protocol.serverRequestRpcs).pipe(
     Effect.provideService(RpcClient.Protocol, rpcProtocol)
   )
+  const capabilities = McpSchema.ClientCapabilities.make(options.capabilities ?? {})
 
   return {
-    client,
+    wireClient,
+    reverseClient: protocol.toReverseClient(capabilities, wireClient),
     requests: Ref.get(requests),
     takeRequest: Queue.take(inbox)
   } satisfies McpTestPeer

@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
-import * as McpProtocol from "effect/unstable/ai/internal/mcpProtocol"
 import * as McpProtocolRegistry from "effect/unstable/ai/internal/mcpProtocolRegistry"
+import type * as McpProtocol from "effect/unstable/ai/internal/protocolAdapter"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 
@@ -24,17 +24,28 @@ const makeTestProtocol = <
     })
   })
 
-  return McpProtocol.make({
+  const clientRpcs = RpcGroup.make(TestRequest)
+  return {
     protocolVersion,
     transport: {
       acceptsJsonRpcBatches: true,
       requiresVersionHeader: false
     },
-    clientRpcs: RpcGroup.make(TestRequest),
+    clientRpcs,
     clientNotificationRpcs: RpcGroup.make(),
     serverRequestRpcs: RpcGroup.make(),
-    serverNotificationRpcs: RpcGroup.make()
-  })
+    serverNotificationRpcs: RpcGroup.make(),
+    payloadCodecs: (rpc: Rpc.AnyWithProps) => {
+      const schema = Schema.toCodecJson(rpc.payloadSchema)
+      return {
+        decode: Schema.decodeUnknownEffect(schema),
+        encode: Schema.encodeUnknownEffect(schema)
+      }
+    },
+    projectNotification: () => Effect.succeed(undefined),
+    normalizeCancellation: () => Effect.die("not used by the protocol registry tests"),
+    normalizeClientNotification: () => Effect.succeed(undefined)
+  } satisfies McpProtocol.AnyProtocolAdapter
 }
 
 const request = (payload: unknown) => ({
