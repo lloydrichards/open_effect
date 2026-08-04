@@ -6,6 +6,15 @@
 import { protocol as protocol2024_11_05 } from "./internal/mcpProtocol/v2024_11_05.ts"
 import { protocol as protocol2025_03_26 } from "./internal/mcpProtocol/v2025_03_26.ts"
 import { protocol as protocol2025_06_18 } from "./internal/mcpProtocol/v2025_06_18.ts"
+import { protocol as protocol2025_11_25 } from "./internal/mcpProtocol/v2025_11_25.ts"
+
+/**
+ * The MCP 2025-11-25 protocol implementation.
+ *
+ * @category protocols
+ * @since 4.0.0
+ */
+export const v2025_11_25 = protocol2025_11_25
 
 /**
  * The MCP 2025-06-18 protocol implementation.
@@ -44,7 +53,11 @@ export const v2024_11_05 = protocol2024_11_05
  * @category models
  * @since 4.0.0
  */
-export type ProtocolAdapter = typeof v2024_11_05 | typeof v2025_03_26 | typeof v2025_06_18
+export type ProtocolAdapter =
+  | typeof v2024_11_05
+  | typeof v2025_03_26
+  | typeof v2025_06_18
+  | typeof v2025_11_25
 
 /**
  * The MCP protocol versions implemented by this release.

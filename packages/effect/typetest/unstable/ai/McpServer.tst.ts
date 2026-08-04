@@ -12,7 +12,7 @@ import { describe, expect, it } from "tstyche"
 const serverOptions = {
   name: "TestServer",
   version: "1.0.0",
-  protocols: [McpProtocol.v2025_06_18]
+  protocols: [McpProtocol.v2025_11_25]
 } as const
 
 describe("McpServer", () => {
@@ -72,9 +72,11 @@ describe("McpServer", () => {
 
     it("should expose every historical protocol adapter", () => {
       expect<keyof typeof McpProtocol>().type.toBe<
-        "v2024_11_05" | "v2025_03_26" | "v2025_06_18"
+        "v2024_11_05" | "v2025_03_26" | "v2025_06_18" | "v2025_11_25"
       >()
-      expect<McpProtocol.ProtocolVersion>().type.toBe<"2024-11-05" | "2025-03-26" | "2025-06-18">()
+      expect<McpProtocol.ProtocolVersion>().type.toBe<
+        "2024-11-05" | "2025-03-26" | "2025-06-18" | "2025-11-25"
+      >()
     })
 
     it("should expose invalid protocol declarations as typed constructor failures", () => {

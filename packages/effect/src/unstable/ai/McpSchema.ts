@@ -2600,7 +2600,7 @@ export class ElicitationDeclined extends Schema.Error<ElicitationDeclined>("@eff
  */
 export class McpReverseOperationUnsupported extends Data.TaggedError("McpReverseOperationUnsupported")<{
   readonly operation: "roots/list" | "sampling/createMessage" | "elicitation/create"
-  readonly protocolVersion: "2024-11-05" | "2025-03-26" | "2025-06-18"
+  readonly protocolVersion: "2024-11-05" | "2025-03-26" | "2025-06-18" | "2025-11-25"
   readonly reason: string
 }> {}
 
@@ -2647,7 +2647,7 @@ export interface McpReverseClient {
  */
 export class McpServerClient extends Context.Service<McpServerClient, {
   readonly clientId: number
-  readonly protocolVersion: "2024-11-05" | "2025-03-26" | "2025-06-18"
+  readonly protocolVersion: "2024-11-05" | "2025-03-26" | "2025-06-18" | "2025-11-25"
   readonly clientCapabilities: ClientCapabilities
   readonly clientInfo: Implementation
   readonly initializePayload: typeof Initialize.payloadSchema["Type"]
