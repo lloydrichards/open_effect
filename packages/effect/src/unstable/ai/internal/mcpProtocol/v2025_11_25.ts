@@ -35,13 +35,34 @@ const requireCapability = (
     ? Effect.void
     : Effect.fail(unsupported(operation, `Client did not advertise the ${capability} capability`))
 
-const supportsElicitationSchema = (request: typeof PublicMcpSchema.Elicit.payloadSchema.Type): boolean => {
-  if (request.mode === "url") return false
-  if (request.requestedSchema.$schema !== undefined) return false
-  return Object.values(request.requestedSchema.properties).every((property) => {
-    if (Array.isArray(property.type) || "oneOf" in property || "items" in property) return false
-    return property.type === "boolean" || !("default" in property)
+const hasSamplingToolsCapability = (profile: McpCore.NegotiatedProtocolProfile): boolean =>
+  profile.clientCapabilities.sampling?.tools !== undefined
+
+const requiresSamplingTools = (request: typeof PublicMcpSchema.CreateMessage.payloadSchema.Type): boolean =>
+  request.tools !== undefined ||
+  request.toolChoice !== undefined ||
+  request.messages.some((message) => {
+    const content = message.content
+    return "type" in content
+      ? content.type === "tool_use" || content.type === "tool_result"
+      : content.some((block) => block.type === "tool_use" || block.type === "tool_result")
   })
+
+const resultRequiresSamplingTools = (result: typeof McpSchema.CreateMessage.successSchema.Type): boolean =>
+  result.stopReason === "toolUse" ||
+  ("type" in result.content
+    ? result.content.type === "tool_use" || result.content.type === "tool_result"
+    : result.content.some((block) => block.type === "tool_use" || block.type === "tool_result"))
+
+const hasElicitationModeCapability = (
+  profile: McpCore.NegotiatedProtocolProfile,
+  mode: "form" | "url"
+): boolean => {
+  const elicitation = profile.clientCapabilities.elicitation
+  if (elicitation === undefined) return false
+  return mode === "form"
+    ? elicitation.form !== undefined || elicitation.url === undefined
+    : elicitation.url !== undefined
 }
 
 const projectCapabilities = (
@@ -344,9 +365,9 @@ export const protocol = McpProtocol.make({
     createMessage: (request) =>
       Effect.gen(function*() {
         yield* requireCapability(profile, "sampling/createMessage", "sampling")
-        if (!McpProtocol.isLegacySamplingRequest(request)) {
+        if (requiresSamplingTools(request) && !hasSamplingToolsCapability(profile)) {
           return yield* Effect.fail(
-            unsupported("sampling/createMessage", "Request is not representable by this protocol")
+            unsupported("sampling/createMessage", "Client did not advertise the sampling.tools capability")
           )
         }
         const wireRequest = yield* McpProtocol.transcode(
@@ -357,6 +378,11 @@ export const protocol = McpProtocol.make({
           Effect.mapError(() => unsupported("sampling/createMessage", "Request is not representable by this protocol"))
         )
         const result = yield* client["sampling/createMessage"](wireRequest)
+        if (resultRequiresSamplingTools(result) && !hasSamplingToolsCapability(profile)) {
+          return yield* Effect.fail(
+            unsupported("sampling/createMessage", "Client did not advertise the sampling.tools capability")
+          )
+        }
         return yield* McpProtocol.transcode(
           McpSchema.CreateMessage.successSchema,
           PublicMcpSchema.CreateMessage.successSchema,
@@ -370,8 +396,11 @@ export const protocol = McpProtocol.make({
     elicit: (request) =>
       Effect.gen(function*() {
         yield* requireCapability(profile, "elicitation/create", "elicitation")
-        if (!supportsElicitationSchema(request)) {
-          return yield* Effect.fail(unsupported("elicitation/create", "Request is not representable by this protocol"))
+        const mode = request.mode === "url" ? "url" : "form"
+        if (!hasElicitationModeCapability(profile, mode)) {
+          return yield* Effect.fail(
+            unsupported("elicitation/create", `Client did not advertise the elicitation.${mode} capability`)
+          )
         }
         const wireRequest = yield* McpProtocol.transcode(
           PublicMcpSchema.Elicit.payloadSchema,
