@@ -131,6 +131,19 @@ export const transcode = <
   )
 
 /** @internal */
+export const transcodeStrict = <
+  From extends Schema.Constraint,
+  To extends Schema.Constraint
+>(
+  from: From,
+  to: To,
+  input: Schema.Schema.Type<From>
+) =>
+  Schema.encodeEffect(from)(input).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(to, { onExcessProperty: "error" }))
+  )
+
+/** @internal */
 export interface ProjectedNotification {
   readonly tag: string
   readonly payload: unknown
