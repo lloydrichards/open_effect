@@ -83,6 +83,28 @@ const assertSystemError = (
 export const suite = (name: string, layer: Layer.Layer<FileSystem.FileSystem, unknown>) =>
   it.layer(layer, { timeout: { seconds: 30 } })(`FileSystem (${name})`, (it) => {
     describe("path operations", () => {
+      it.effect("should resolve relative paths when the adapter working directory is defined", () =>
+        Effect.gen(function*() {
+          const fs = yield* FileSystem.FileSystem
+          const workingDirectory = yield* fs.realPath(".")
+          const directory = yield* fs.makeTempDirectoryScoped({
+            directory: workingDirectory,
+            prefix: "effect-filesystem-relative-"
+          })
+          const directoryName = directory.replaceAll("\\", "/").split("/").at(-1)!
+          const relativePath = `./${directoryName}/file.txt`
+          const absolutePath = `${directory}/file.txt`
+
+          yield* fs.writeFileString(relativePath, "relative")
+
+          assert.strictEqual(yield* fs.readFileString(absolutePath), "relative")
+          assert.strictEqual(yield* fs.realPath(relativePath), yield* fs.realPath(absolutePath))
+
+          yield* fs.writeFileString(absolutePath, "absolute")
+
+          assert.strictEqual(yield* fs.readFileString(relativePath), "absolute")
+        }))
+
       it.effect("should preserve binary bytes when reading and writing files", () =>
         Effect.gen(function*() {
           const { fs, path } = yield* makeTestContext
@@ -502,6 +524,8 @@ export const suite = (name: string, layer: Layer.Layer<FileSystem.FileSystem, un
     })
 
     describe("file handles and open modes", () => {
+      // TODO: Add shared closed-handle failure coverage separately from error-tag normalization.
+      // Node maps EBADF to Unknown; Deno maps BadResource. A common tag needs an adapter fix and regression coverage.
       it.effect("should keep read cursors independent when a file has multiple handles", () =>
         Effect.gen(function*() {
           const { fs, path } = yield* makeTestContext
@@ -889,7 +913,8 @@ export const suite = (name: string, layer: Layer.Layer<FileSystem.FileSystem, un
           assert.strictEqual(decoder.decode(yield* readAllocUpTo(destinationHandle, 6)), "source")
         }))
 
-      // TODO: Define whether overwrite: false succeeds without changing an existing destination or fails with AlreadyExists.
+      // TODO: Decide whether overwrite: false must succeed or fail with AlreadyExists across adapters.
+      // Node skips an existing destination; Deno rejects it. Until aligned, require only that its contents are preserved.
       it.effect("should preserve an existing copy destination when overwrite is false", () =>
         Effect.gen(function*() {
           const { fs, path } = yield* makeTestContext
@@ -980,7 +1005,8 @@ export const suite = (name: string, layer: Layer.Layer<FileSystem.FileSystem, un
           assertSystemError(error, { tag: "NotFound", method: "open", pathOrDescriptor: missing })
         }))
 
-      // TODO: Add a deterministic synchronization point before covering stream and sink finalization after interruption.
+      // TODO: Signal handle acquisition with a Deferred in trackedFs.open, interrupt the blocked stream or sink,
+      // and assert finalization. This is test work; no public synchronization hook is needed.
       it.effect("should finalize derived stream and sink handles when their operations succeed or fail", () =>
         Effect.gen(function*() {
           const { fs, path } = yield* makeTestContext
@@ -1015,9 +1041,6 @@ export const suite = (name: string, layer: Layer.Layer<FileSystem.FileSystem, un
     })
 
     describe("adapter capabilities", () => {
-      // TODO: Define the public working-directory contract. Decide separately whether the memory adapter defaults to virtual `/`.
-      // it.effect("should resolve relative paths when the adapter working directory is defined", () => {})
-
       it.effect("should normalize missing-path errors when primitive path operations fail", () =>
         Effect.gen(function*() {
           const { fs, path } = yield* makeTestContext
@@ -1035,7 +1058,8 @@ export const suite = (name: string, layer: Layer.Layer<FileSystem.FileSystem, un
             ["rename", fs.rename(missing, destination)],
             ["stat", fs.stat(missing)],
             ["truncate", fs.truncate(missing)],
-            // TODO: Decide whether FileSystem.utimes failures report `utimes` or the host's `utime`. Node reports `utime`.
+            // TODO: Normalize Node's "utime" error method to "utimes" with a regression test and changeset,
+            // then assert the method here. Deno and FileSystem.makeNoop already use "utimes".
             [undefined, fs.utimes(missing, 0, 0)]
           ] as const
 
@@ -1045,7 +1069,7 @@ export const suite = (name: string, layer: Layer.Layer<FileSystem.FileSystem, un
           }
         }))
 
-      // TODO: Define what ok, readable, and writable mean for adapters without user identity or permission state.
+      // This covers accessible files and missing paths. Permission denial and virtual identity are adapter-specific.
       it.effect("should check readable and writable access when no virtual identity is available", () =>
         Effect.gen(function*() {
           const { fs, path } = yield* makeTestContext
@@ -1143,8 +1167,8 @@ export const suite = (name: string, layer: Layer.Layer<FileSystem.FileSystem, un
           assertSystemError(error, { method: "realPath", pathOrDescriptor: first })
         }))
 
-      // TODO: Add positive chmod and chown conformance in a POSIX-only metadata capability suite.
-      // it.effect("should change file permissions and ownership when POSIX metadata is supported", () => {})
+      // TODO: Add positive chmod/chown coverage gated by adapter and host support, including ownership privileges.
+      // Deno already covers chmod through writeFile mode preservation; shared ownership-change coverage is still missing.
 
       it.effect("should report updated access and modification timestamps when metadata is available", () =>
         Effect.gen(function*() {
@@ -1165,7 +1189,7 @@ export const suite = (name: string, layer: Layer.Layer<FileSystem.FileSystem, un
           }
         }))
 
-      // TODO: Define whether preserveTimestamps guarantees only mtime or both atime and mtime. Node preserves mtime but resets atime.
+      // TODO: Decide whether preserveTimestamps also guarantees atime. Keep mtime as the shared minimum until then.
       it.effect("should preserve the modification timestamp when copying with metadata preservation", () =>
         Effect.gen(function*() {
           const { fs, path } = yield* makeTestContext
@@ -1202,9 +1226,9 @@ export const suite = (name: string, layer: Layer.Layer<FileSystem.FileSystem, un
           assert.isTrue(matches[0].endsWith("src/index.ts"))
         }))
 
-      // TODO: Add deterministic watcher-registration and subscription-control hooks before specifying event ordering,
-      // normalized paths, or watcher cleanup.
-      // it.effect("should emit normalized events when watching registered paths", () => {})
+      // TODO: Add watcher readiness and cleanup coverage per adapter; Node's startWatch helper uses a sentinel event.
+      // Specify portable event paths separately: Node emits filenames, while Deno forwards native event paths.
+      // Do not require identical native event ordering to test cleanup.
 
       it.effect("should preserve error context when watching a missing path", () =>
         Effect.gen(function*() {
