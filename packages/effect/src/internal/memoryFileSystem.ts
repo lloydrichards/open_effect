@@ -248,7 +248,8 @@ const childPath = (parent: string, name: string): string => parent === "/" ? `/$
 
 const includesWatchPath = (watchedPath: string, recursive: boolean, eventPath: string): boolean =>
   eventPath === watchedPath ||
-  recursive && (watchedPath === "/" || eventPath.startsWith(`${watchedPath}/`)) ||
+  (eventPath.startsWith(watchedPath === "/" ? "/" : `${watchedPath}/`) &&
+    (recursive || !eventPath.slice(watchedPath === "/" ? 1 : watchedPath.length + 1).includes("/"))) ||
   (eventPath !== "/" && watchedPath.startsWith(`${eventPath}/`))
 
 const publishWatchEvents = (
@@ -276,21 +277,27 @@ const collectInodePaths = (
   parent = "/"
 ): Array<string> => {
   const paths: Array<string> = []
-  for (const [name, childInode] of directory.entries) {
-    const path = childPath(parent, name)
-    if (childInode === inode) paths.push(path)
-    const child = findInode(state, childInode)
-    if (child?._tag === "Directory") {
-      paths.push(...collectInodePaths(state, inode, child, path))
+  const pending: Array<readonly [DirectoryInode, string]> = [[directory, parent]]
+  while (pending.length > 0) {
+    const next = pending.pop()
+    if (next === undefined) break
+    const [directory, parent] = next
+    for (const [name, childInode] of directory.entries) {
+      const path = childPath(parent, name)
+      if (childInode === inode) paths.push(path)
+      const child = findInode(state, childInode)
+      if (child?._tag === "Directory") pending.push([child, path])
     }
   }
   return paths
 }
 
 const inodeUpdateEvents = (
+  volume: Volume,
   state: State,
   inode: Inode
 ): ReadonlyArray<FileSystem.WatchEvent.Update> => {
+  if (volume.watchers.size === 0) return []
   const root = findInode(state, RootInode)
   if (root?._tag !== "Directory") return []
   if (inode === RootInode) return [{ _tag: "Update", path: "/" }]
@@ -648,9 +655,10 @@ const resolveParent = Effect.fnUntraced(function*(
   state: State,
   path: string,
   method: string,
-  errorPath: string = path
+  errorPath: string = path,
+  allowTrailingSeparator = false
 ) {
-  if (path.length === 0 || path === "/" || path.endsWith("/") || path.includes("\0")) {
+  if (path.length === 0 || path === "/" || path.endsWith("/") && !allowTrailingSeparator || path.includes("\0")) {
     return yield* badResource(method, errorPath)
   }
   const components = path.split("/").filter((component) => component.length > 0)
@@ -676,15 +684,19 @@ const resolveEntry = Effect.fnUntraced(function*(
   path: string,
   method: string
 ) {
-  const parent = yield* resolveParent(state, path, method)
+  const parent = yield* resolveParent(state, path, method, path, true)
   const inode = findEntry(parent.entry, parent.name)
   if (inode === undefined) {
     return yield* notFound(method, path)
   }
+  const entry = yield* getInode(state, inode, method, path)
+  if (path.endsWith("/") && entry._tag !== "Directory") {
+    return yield* badResource(method, path)
+  }
   return {
     parent: parent.entry,
     name: parent.name,
-    entry: yield* getInode(state, inode, method, path),
+    entry,
     path: childPath(parent.path, parent.name)
   } satisfies ResolvedEntry
 })
@@ -766,6 +778,9 @@ const makeDirectory = (volume: Volume) =>
         let nextState = state
         const recursive = options?.recursive === true
         const pieces = path.split("/").filter((piece) => piece.length > 0)
+        if (pieces.length === 0 && path.length > 0 && recursive) {
+          return transitionResult(state, undefined)
+        }
         if (pieces.length === 0 || path.includes("\0")) {
           return yield* badResource(method, path)
         }
@@ -778,10 +793,8 @@ const makeDirectory = (volume: Volume) =>
             if (existing.success.entry._tag !== "Directory") {
               return yield* alreadyExists(method, path)
             }
-            if (index === pieces.length - 1) {
-              return recursive
-                ? transitionResult(nextState, undefined)
-                : yield* alreadyExists(method, path)
+            if (index === pieces.length - 1 && !recursive) {
+              return yield* alreadyExists(method, path)
             }
             continue
           }
@@ -905,12 +918,15 @@ const remove = (volume: Volume) =>
   })
 
 const containsDirectory = (state: State, ancestor: Inode, candidate: Inode): boolean => {
-  if (ancestor === candidate) return true
-  const entry = findInode(state, ancestor)
-  if (entry === undefined || entry._tag !== "Directory") return false
-  for (const inode of HashMap.values(entry.entries)) {
-    if (findInode(state, inode)?._tag === "Directory" && containsDirectory(state, inode, candidate)) {
-      return true
+  const pending = [ancestor]
+  while (pending.length > 0) {
+    const inode = pending.pop()
+    if (inode === undefined) break
+    if (inode === candidate) return true
+    const entry = findInode(state, inode)
+    if (entry?._tag !== "Directory") continue
+    for (const child of HashMap.values(entry.entries)) {
+      if (findInode(state, child)?._tag === "Directory") pending.push(child)
     }
   }
   return false
@@ -925,7 +941,13 @@ const rename = (volume: Volume) =>
     return yield* volume.mutate((state) =>
       Effect.gen(function*() {
         const source = yield* resolveEntry(state, oldPath, method)
-        const destinationParent = yield* resolveParent(state, newPath, method)
+        const destinationParent = yield* resolveParent(
+          state,
+          newPath,
+          method,
+          newPath,
+          source.entry._tag === "Directory"
+        )
         if (source.parent.ino === destinationParent.inode && source.name === destinationParent.name) {
           return transitionResult(state, undefined)
         }
@@ -1235,7 +1257,7 @@ const copyEntryUnlocked = Effect.fnUntraced(function*(
     followFinalSymbolicLink: false,
     method
   }).pipe(Effect.mapError((error) => withSystemErrorPath(error, method, fromPath)))
-  const destination = yield* resolveParent(state, toPath, method)
+  const destination = yield* resolveParent(state, toPath, method, toPath, source.entry._tag === "Directory")
   if (source.entry._tag === "Directory" && containsDirectory(state, source.inode, destination.inode)) {
     return yield* badResource(method, toPath, "Cannot copy a directory into itself")
   }
@@ -1307,7 +1329,7 @@ const copyFile = (volume: Volume) =>
             nextState,
             undefined,
             existing._tag === "Success"
-              ? inodeUpdateEvents(nextState, destination.inode)
+              ? inodeUpdateEvents(volume, nextState, destination.inode)
               : [{ _tag: "Create", path: destination.path }]
           )
         })
@@ -1485,7 +1507,7 @@ const openDescriptor: (
           nextState,
           descriptor.fd,
           tag === "Update"
-            ? inodeUpdateEvents(nextState, descriptor.inode)
+            ? inodeUpdateEvents(volume, nextState, descriptor.inode)
             : [{ _tag: "Create", path: resolved.path }]
         )
       })
@@ -1658,7 +1680,7 @@ const writeDescriptor = (
       return transitionResult(
         nextState,
         written,
-        descriptor === undefined ? [] : inodeUpdateEvents(nextState, descriptor.inode)
+        descriptor === undefined ? [] : inodeUpdateEvents(volume, nextState, descriptor.inode)
       )
     })
   )
@@ -1751,7 +1773,7 @@ class MemoryFile implements FileSystem.File {
               ctime: now
             })
           }
-          return transitionResult(nextState, undefined, inodeUpdateEvents(nextState, descriptor.inode))
+          return transitionResult(nextState, undefined, inodeUpdateEvents(volume, nextState, descriptor.inode))
         })
       ))
   }
@@ -1795,15 +1817,25 @@ const collectDirectoryEntries = (
   prefix = ""
 ): Array<string> => {
   const output: Array<string> = []
-  for (const name of [...HashMap.keys(directory.entries)].sort()) {
-    const relativePath = prefix.length === 0 ? name : `${prefix}/${name}`
-    output.push(relativePath)
-    if (!recursive) continue
-    const inode = findEntry(directory, name)
-    const child = inode === undefined ? undefined : findInode(state, inode)
-    if (child?._tag === "Directory") {
-      output.push(...collectDirectoryEntries(state, child, true, relativePath))
+  const pending: Array<readonly [Inode, string]> = []
+  const enqueueChildren = (directory: DirectoryInode, prefix: string) => {
+    // Reverse insertion preserves the existing sorted depth-first traversal.
+    for (const name of [...HashMap.keys(directory.entries)].sort().reverse()) {
+      const inode = findEntry(directory, name)
+      if (inode !== undefined) {
+        pending.push([inode, prefix.length === 0 ? name : `${prefix}/${name}`])
+      }
     }
+  }
+  enqueueChildren(directory, prefix)
+  while (pending.length > 0) {
+    const next = pending.pop()
+    if (next === undefined) break
+    const [inode, path] = next
+    output.push(path)
+    if (!recursive) continue
+    const child = findInode(state, inode)
+    if (child?._tag === "Directory") enqueueChildren(child, path)
   }
   return output
 }
@@ -1870,7 +1902,7 @@ const writeFile = (volume: Volume) =>
         nextState,
         undefined,
         tag === "Update"
-          ? inodeUpdateEvents(nextState, resolved.inode)
+          ? inodeUpdateEvents(volume, nextState, resolved.inode)
           : [{ _tag: "Create", path: resolved.path }]
       )
     })
@@ -1919,7 +1951,7 @@ const truncate = (volume: Volume) =>
           mtime: now,
           ctime: now
         })
-        return transitionResult(nextState, undefined, inodeUpdateEvents(nextState, resolved.inode))
+        return transitionResult(nextState, undefined, inodeUpdateEvents(volume, nextState, resolved.inode))
       })
     )
   })
@@ -1943,7 +1975,7 @@ const chmod = (volume: Volume) =>
           mode: (resolved.entry.mode & ~PERMISSION_MODE) | (mode & PERMISSION_MODE),
           ctime: now
         })
-        return transitionResult(nextState, undefined, inodeUpdateEvents(nextState, resolved.inode))
+        return transitionResult(nextState, undefined, inodeUpdateEvents(volume, nextState, resolved.inode))
       })
     )
   })
@@ -1971,7 +2003,7 @@ const chown = (volume: Volume) =>
           gid,
           ctime: now
         })
-        return transitionResult(nextState, undefined, inodeUpdateEvents(nextState, resolved.inode))
+        return transitionResult(nextState, undefined, inodeUpdateEvents(volume, nextState, resolved.inode))
       })
     )
   })
@@ -2009,7 +2041,7 @@ const utimes = (volume: Volume) =>
           mtime: modificationTime,
           ctime: now
         })
-        return transitionResult(nextState, undefined, inodeUpdateEvents(nextState, resolved.inode))
+        return transitionResult(nextState, undefined, inodeUpdateEvents(volume, nextState, resolved.inode))
       })
     )
   })
@@ -2575,7 +2607,7 @@ const makeVolume = Effect.gen(function*() {
 // watching
 // =============================================================================
 
-const watch = (volume: Volume) => (path: string) =>
+const watch = (volume: Volume) => (path: string, options?: FileSystem.WatchOptions) =>
   Stream.unwrap(
     Effect.map(
       Effect.acquireRelease(
@@ -2584,7 +2616,7 @@ const watch = (volume: Volume) => (path: string) =>
             const resolved = yield* resolve(state, path, { method: "stat" })
             const subscription: WatchSubscription = {
               path: resolved.path,
-              recursive: resolved.entry._tag === "Directory",
+              recursive: options?.recursive === true,
               queue: undefined,
               // NOTE: `Stream.callback` attaches its queue after subscription
               // registration, so retain matching events across that handoff.

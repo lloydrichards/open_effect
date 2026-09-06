@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Fiber, FileSystem, Layer, Option, type PlatformError, Result, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, type PlatformError, Result, Stream } from "effect"
 import * as MemoryFileSystem from "effect/MemoryFileSystem"
 import { TestClock } from "effect/testing"
 
@@ -8,10 +8,11 @@ const encoder = new TextEncoder()
 const watchEvents = Effect.fnUntraced(function*(
   path: string,
   count: number,
-  mutation: Effect.Effect<void, PlatformError.PlatformError>
+  mutation: Effect.Effect<void, PlatformError.PlatformError>,
+  options?: FileSystem.WatchOptions
 ) {
   const fs = yield* FileSystem.FileSystem
-  const events = yield* fs.watch(path).pipe(
+  const events = yield* fs.watch(path, options).pipe(
     Stream.take(count),
     Stream.runCollect,
     Effect.forkChild({ startImmediately: true })
@@ -26,6 +27,15 @@ const watchEvents = Effect.fnUntraced(function*(
 
 it.layer(MemoryFileSystem.layer)("FileSystem (memory-specific)", (it) => {
   describe("POSIX filesystem profile", () => {
+    it.effect("should accept the existing root when creating directories recursively", () =>
+      Effect.gen(function*() {
+        const fs = yield* FileSystem.FileSystem
+
+        yield* fs.makeDirectory("/", { recursive: true })
+
+        assert.strictEqual((yield* fs.stat("/")).type, "Directory")
+      }))
+
     it.effect("should resolve dot, dot-dot, and repeated separators", () =>
       Effect.gen(function*() {
         const fs = yield* FileSystem.FileSystem
@@ -178,6 +188,105 @@ it.layer(MemoryFileSystem.layer)("FileSystem (memory-specific)", (it) => {
         ["real/file.ts"]
       )
     }))
+
+  for (const recursive of [undefined, false, true]) {
+    it.effect(`should watch ${recursive === true ? "nested changes with recursion enabled" : `only direct children with recursive ${recursive}`}`, () =>
+      Effect.gen(function*() {
+        const fs = yield* FileSystem.FileSystem
+        const root = `/watch-recursive-${recursive}`
+        yield* fs.makeDirectory(`${root}/child`, { recursive: true })
+
+        const events = yield* watchEvents(
+          root,
+          recursive === true ? 2 : 1,
+          Effect.gen(function*() {
+            yield* fs.writeFileString(`${root}/child/nested.txt`, "nested")
+            yield* fs.writeFileString(`${root}/direct.txt`, "direct")
+          }),
+          recursive === undefined ? undefined : { recursive }
+        )
+
+        assert.deepStrictEqual(
+          events,
+          recursive === true
+            ? [
+              { _tag: "Create", path: `${root}/child/nested.txt` },
+              { _tag: "Create", path: `${root}/direct.txt` }
+            ]
+            : [{ _tag: "Create", path: `${root}/direct.txt` }]
+        )
+      }))
+  }
+
+  it.effect("should write, list, copy, and rename a deeply nested volume", () =>
+    Effect.gen(function*() {
+      const fs = yield* MemoryFileSystem.make
+      yield* fs.writeFileString("/file.txt", "before")
+      const file = yield* fs.open("/file.txt", { flag: "r+" })
+      // This depth exercises traversal beyond the JavaScript call stack through public operations.
+      yield* fs.makeDirectory("/d".repeat(6_000), { recursive: true })
+
+      const written = yield* Effect.exit(file.writeAll(encoder.encode("AFTER!")))
+      const withoutWatchers = {
+        succeeded: Exit.isSuccess(written),
+        contents: yield* fs.readFileString("/file.txt"),
+        position: yield* file.seek(0, "current")
+      }
+      const watcher = yield* fs.watch("/file.txt").pipe(
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild({ startImmediately: true })
+      )
+      yield* file.seek(0, "start")
+      const watchedWrite = yield* Effect.exit(file.writeAll(encoder.encode("second")))
+      const withWatcher = {
+        succeeded: Exit.isSuccess(watchedWrite),
+        contents: yield* fs.readFileString("/file.txt"),
+        position: yield* file.seek(0, "current")
+      }
+
+      assert.deepStrictEqual({ withoutWatchers, withWatcher }, {
+        withoutWatchers: { succeeded: true, contents: "AFTER!", position: FileSystem.Size(6) },
+        withWatcher: { succeeded: true, contents: "second", position: FileSystem.Size(6) }
+      })
+      const events = yield* Fiber.join(watcher)
+      assert.deepStrictEqual(events, [{ _tag: "Update", path: "/file.txt" }])
+
+      const listed = yield* Effect.exit(fs.readDirectory("/d", { recursive: true }))
+      const copied = yield* Effect.exit(fs.copy("/d", "/copy"))
+      const moved = yield* Effect.exit(fs.rename("/d", "/moved"))
+
+      assert.deepStrictEqual({
+        listing: Exit.isFailure(listed) ? Cause.pretty(listed.cause) : undefined,
+        copy: Exit.isFailure(copied) ? Cause.pretty(copied.cause) : undefined,
+        rename: Exit.isFailure(moved) ? Cause.pretty(moved.cause) : undefined
+      }, { listing: undefined, copy: undefined, rename: undefined })
+      if (Exit.isSuccess(listed)) {
+        assert.strictEqual(listed.value.length, 5_999)
+        assert.strictEqual(listed.value[5_998], Array(5_999).fill("d").join("/"))
+      }
+      assert.isFalse(yield* fs.exists("/d"))
+      assert.strictEqual((yield* fs.stat(`/copy${"/d".repeat(5_999)}`)).type, "Directory")
+      assert.strictEqual((yield* fs.stat(`/moved${"/d".repeat(5_999)}`)).type, "Directory")
+    }), 60_000)
+
+  for (const suffix of [".", ".."]) {
+    it.effect(`should publish directory creation when recursive mkdir ends in ${suffix}`, () =>
+      Effect.gen(function*() {
+        const fs = yield* MemoryFileSystem.make
+        const events = yield* watchEvents(
+          "/",
+          1,
+          Effect.gen(function*() {
+            yield* fs.makeDirectory(`/new/${suffix}`, { recursive: true })
+            yield* fs.writeFileString("/sentinel", "done")
+          })
+        ).pipe(Effect.provideService(FileSystem.FileSystem, fs))
+
+        assert.isTrue(yield* fs.exists("/new"))
+        assert.deepStrictEqual(events, [{ _tag: "Create", path: "/new" }])
+      }))
+  }
 
   it.effect("should publish committed normalized events for memory mutations", () =>
     Effect.gen(function*() {
