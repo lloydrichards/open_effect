@@ -317,7 +317,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
             subscribeServerNotifications: Effect.acquireRelease(
               PubSub.subscribe(events),
               () => Deferred.succeed(released, undefined)
-            ),
+            ).pipe(Effect.map((events) => ({ events, sequence: 0 }))),
             sendNotification: (_protocolVersion, _clientId, notification) =>
               Effect.gen(function*() {
                 if (notification.tag === McpSchema2026.SubscriptionsAcknowledgedNotification._tag) {
@@ -337,7 +337,8 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
 
           yield* Deferred.await(acknowledgmentStarted)
           yield* PubSub.publish(events, {
-            notification: McpCore.ServerNotification.ToolsChanged({})
+            notification: McpCore.ServerNotification.ToolsChanged({}),
+            sequence: 1
           })
           yield* Deferred.succeed(releaseAcknowledgment, undefined)
 
@@ -381,7 +382,7 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
                 )
               ),
               () => Deferred.succeed(released, undefined)
-            ),
+            ).pipe(Effect.map((events) => ({ events, sequence: 0 }))),
             sendNotification: () => Effect.void,
             supportedVersions: [McpSchema2026.protocolVersion],
             serverInfo: { name: "SubscriptionConformance", version: "1.0.0" },
@@ -590,6 +591,36 @@ export const suite = (protocol: McpProtocol.ProtocolAdapter, layer: McpConforman
           const notification = yield* fixture.awaitOutboundMethod("notifications/tools/list_changed")
           assert.notProperty(notification, "id")
           assert.notProperty(paramsOf(notification), "_meta")
+        }))
+
+      it.effect("should notify only about tool changes made after the first HTTP subscription", () =>
+        Effect.gen(function*() {
+          const clock = yield* makeTrackingClock
+          const { harness, serverReady } = yield* makeHttpSubscriptionHarness(protocol, clock.layer)
+          const id = "first-http-subscription"
+          const response = yield* harness.post(httpListenRequest(protocol, id), httpHeaders(protocol))
+          assert.strictEqual(response.status, 200)
+          assert.isNotNull(response.body)
+          const reader = response.body.getReader()
+          yield* Effect.addFinalizer(() => Effect.promise(() => reader.cancel()))
+          const read = Effect.promise(() => reader.read())
+          const decoder = new TextDecoder()
+
+          const acknowledgment = decoder.decode((yield* read).value)
+          assert.isTrue(acknowledgment.startsWith("data: "))
+          assertAcknowledged(JSON.parse(acknowledgment.slice(6)), id, { toolsListChanged: true })
+
+          const next = yield* read.pipe(Effect.forkChild)
+          yield* TestClock.adjust("15 seconds")
+          assert.strictEqual(decoder.decode((yield* Fiber.join(next)).value), ": keepalive\n\n")
+
+          const server = yield* Deferred.await(serverReady)
+          yield* server.addTool(makeTool("registered-after-first-subscription"))
+          const notification = decoder.decode((yield* read).value)
+          assert.isTrue(notification.startsWith("data: "))
+          const message = JSON.parse(notification.slice(6))
+          assert.strictEqual(message.method, "notifications/tools/list_changed")
+          assert.strictEqual(subscriptionIdOf(message), id)
         }))
 
       it.effect("should keep idle HTTP subscriptions alive with periodic SSE comments", () =>

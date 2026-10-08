@@ -386,7 +386,7 @@ export const makeHandlers = (
       }
       const presence = yield* context.registrationPresence
       const eventsScope = yield* Scope.fork(yield* Effect.scope)
-      const events = yield* Scope.provide(context.subscribeServerNotifications, eventsScope)
+      const { events, sequence } = yield* Scope.provide(context.subscribeServerNotifications, eventsScope)
       const honored = {
         ...(presence.tools && request.notifications.toolsListChanged === true
           ? { toolsListChanged: true }
@@ -410,6 +410,9 @@ export const makeHandlers = (
       yield* Effect.gen(function*() {
         while (true) {
           const event = yield* PubSub.take(events)
+          if (event.sequence <= sequence) {
+            continue
+          }
           if (event.targetClientId !== undefined && event.targetClientId !== client.id) {
             continue
           }

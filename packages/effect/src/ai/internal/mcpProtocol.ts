@@ -378,7 +378,10 @@ export interface HandlerInstallationTarget {
  */
 export interface HandlerInstallationContext {
   readonly subscribeServerNotifications: Effect.Effect<
-    PubSub.Subscription<CanonicalServerNotification>,
+    {
+      readonly events: PubSub.Subscription<CanonicalServerNotification>
+      readonly sequence: number
+    },
     never,
     Scope.Scope
   >
@@ -419,6 +422,7 @@ export interface HandlerInstallationContext {
  */
 export interface CanonicalServerNotification {
   readonly notification: SubscriptionServerNotification
+  readonly sequence: number
   readonly targetClientId?: number | undefined
 }
 

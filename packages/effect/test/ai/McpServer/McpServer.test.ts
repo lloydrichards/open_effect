@@ -2626,7 +2626,7 @@ describe("McpServer", () => {
             subscribeServerNotifications: Effect.acquireRelease(
               PubSub.subscribe(events),
               () => Deferred.succeed(subscriptionReleased, undefined)
-            ),
+            ).pipe(Effect.map((events) => ({ events, sequence: 0 }))),
             sendNotification: (_protocolVersion, _clientId, notification) =>
               notification.tag === McpSchema2026.SubscriptionsAcknowledgedNotification._tag
                 ? Deferred.succeed(acknowledgmentStarted, undefined).pipe(
@@ -2659,7 +2659,8 @@ describe("McpServer", () => {
 
           for (let index = 0; index <= 65; index++) {
             yield* PubSub.publish(events, {
-              notification: McpCore.ServerNotification.ToolsChanged({})
+              notification: McpCore.ServerNotification.ToolsChanged({}),
+              sequence: 1
             })
             yield* Effect.yieldNow
           }
@@ -2698,7 +2699,7 @@ describe("McpServer", () => {
                 subscriptionIndex === 0 ? slowSubscriptionReleased : fastSubscriptionReleased,
                 undefined
               )
-          ).pipe(Effect.map(([subscription]) => subscription)),
+          ).pipe(Effect.map(([events]) => ({ events, sequence: 0 }))),
           sendNotification: (_protocolVersion, clientId, notification) => {
             if (notification.tag === McpSchema2026.SubscriptionsAcknowledgedNotification._tag) {
               return Deferred.succeed(clientId === 1 ? slowAcknowledged : fastAcknowledged, undefined)
@@ -2738,18 +2739,21 @@ describe("McpServer", () => {
 
         for (let index = 0; index <= pendingNotificationLimit; index++) {
           yield* PubSub.publish(events, {
-            notification: McpCore.ServerNotification.PromptsChanged({})
+            notification: McpCore.ServerNotification.PromptsChanged({}),
+            sequence: 1
           })
         }
         yield* PubSub.publish(events, {
-          notification: McpCore.ServerNotification.ToolsChanged({})
+          notification: McpCore.ServerNotification.ToolsChanged({}),
+          sequence: 1
         })
         yield* Deferred.await(slowWriteStarted)
         yield* Queue.take(fastDeliveryCompleted)
 
         for (let index = 0; index < pendingNotificationLimit; index++) {
           yield* PubSub.publish(events, {
-            notification: McpCore.ServerNotification.ToolsChanged({})
+            notification: McpCore.ServerNotification.ToolsChanged({}),
+            sequence: 1
           })
           yield* Queue.take(fastDeliveryCompleted)
         }
@@ -2757,7 +2761,8 @@ describe("McpServer", () => {
         assert.isTrue(Option.isNone(yield* Deferred.poll(slowTerminated)))
 
         yield* PubSub.publish(events, {
-          notification: McpCore.ServerNotification.ToolsChanged({})
+          notification: McpCore.ServerNotification.ToolsChanged({}),
+          sequence: 1
         })
         yield* Queue.take(fastDeliveryCompleted)
 
@@ -2772,7 +2777,8 @@ describe("McpServer", () => {
         assert.isTrue(Option.isNone(yield* Deferred.poll(fastSubscriptionReleased)))
 
         yield* PubSub.publish(events, {
-          notification: McpCore.ServerNotification.ToolsChanged({})
+          notification: McpCore.ServerNotification.ToolsChanged({}),
+          sequence: 1
         })
         yield* Queue.take(fastDeliveryCompleted)
         assert.strictEqual(yield* Ref.get(fastDeliveries), pendingNotificationLimit + 3)

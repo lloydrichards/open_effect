@@ -94,6 +94,7 @@ type CompletionContext = typeof Complete.payloadSchema.Type["context"]
 
 interface QueuedServerNotification {
   readonly notification: McpCore.ServerNotification
+  sequence: number
   readonly targetClientId?: number | undefined
   readonly delivered: Deferred.Deferred<void>
   readonly requestContext?: McpRequestContext["Service"] | undefined
@@ -103,7 +104,7 @@ interface QueuedServerNotification {
 const internalState = new WeakMap<object, {
   readonly core: McpCore.McpCore
   readonly notifications: Queue.Dequeue<QueuedServerNotification>
-  readonly notificationDelivery: { consumers: number }
+  readonly notificationDelivery: { consumers: number; sequence: number }
 }>()
 type ServerExtensions = NonNullable<ServerCapabilities["extensions"]>
 type ServerNotificationRequest<
@@ -321,8 +322,8 @@ export class McpServer extends Context.Service<McpServer, {
       readonly annotations: Context.Context<never>
     }> = []
     const notificationsQueue = yield* Queue.make<QueuedServerNotification>()
-    const notificationDelivery = { consumers: 0 }
-    const pendingListChanges = new Set<string>()
+    const notificationDelivery = { consumers: 0, sequence: 0 }
+    const pendingListChanges = new Map<string, QueuedServerNotification>()
     const dispatcher = (yield* Scheduler).makeDispatcher()
     const notifications = yield* RpcClient.makeNoSerialization(BroadcastServerNotificationRpcs, {
       spanPrefix: "McpServer/Notifications",
@@ -339,20 +340,25 @@ export class McpServer extends Context.Service<McpServer, {
             }
             const queued = {
               notification,
+              sequence: ++notificationDelivery.sequence,
               delivered,
               requestContext: Context.getOrUndefined(fiber.context, McpRequestContext),
               requestHeaders: Context.getOrUndefined(fiber.context, HttpServerRequest.HttpServerRequest)?.headers
             }
             let enqueued = false
             if (message.tag.includes("list_changed")) {
-              if (!pendingListChanges.has(message.tag)) {
+              const pending = pendingListChanges.get(message.tag)
+              if (pending !== undefined) {
+                // Include changes made after a listener joined the pending batch.
+                pending.sequence = queued.sequence
+              } else {
                 enqueued = true
                 const tag = message.tag
                 dispatcher.scheduleTask(() => {
-                  Queue.offerUnsafe(notificationsQueue, queued)
                   pendingListChanges.delete(message.tag)
+                  Queue.offerUnsafe(notificationsQueue, queued)
                 }, 0)
-                pendingListChanges.add(tag)
+                pendingListChanges.set(tag, queued)
               }
             } else {
               enqueued = true
@@ -381,6 +387,7 @@ export class McpServer extends Context.Service<McpServer, {
           Effect.flatMap((delivered) =>
             Queue.offer(notificationsQueue, {
               notification: McpCore.ServerNotification.ElicitationComplete({ elicitationId }),
+              sequence: ++notificationDelivery.sequence,
               targetClientId: clientId,
               delivered
             }).pipe(
@@ -749,6 +756,7 @@ const runWithRuntime = Effect.fnUntraced(function*(
     if (remaining.length === 0) reverseRequestClients.delete(requestId)
     else reverseRequestClients.set(requestId, remaining)
   }
+  const { notificationDelivery: notificationSequence } = internalState.get(server)!
   // A bounded PubSub would let one slow listener block the shared worker and
   // legacy delivery. Each request scope releases its subscription on exit.
   const serverNotifications = yield* PubSub.unbounded<McpProtocolInternal.CanonicalServerNotification>()
@@ -809,7 +817,9 @@ const runWithRuntime = Effect.fnUntraced(function*(
   let writeFromClient!: (clientId: number, message: RpcMessage.FromClientEncoded) => Effect.Effect<void>
   const handlers = yield* runtime.installHandlers({
     core: internalState.get(server)!.core,
-    subscribeServerNotifications: PubSub.subscribe(serverNotifications),
+    subscribeServerNotifications: PubSub.subscribe(serverNotifications).pipe(
+      Effect.map((events) => ({ events, sequence: notificationSequence.sequence }))
+    ),
     ...(!protocol.supportsNotifications ? {} : {
       sendNotification,
       markSubscriptionCancelled: (clientId: number, requestId: RpcMessage.RequestId) =>
@@ -1244,9 +1254,9 @@ const runWithRuntime = Effect.fnUntraced(function*(
   const notificationTails = new Map<number, Deferred.Deferred<void>>()
   yield* Queue.take(notifications).pipe(
     Effect.flatMap(Effect.fnUntraced(function*(queued) {
-      const { delivered, notification, targetClientId, requestContext, requestHeaders } = queued
+      const { delivered, notification, sequence, targetClientId, requestContext, requestHeaders } = queued
       if (McpProtocolInternal.isSubscriptionServerNotification(notification)) {
-        yield* PubSub.publish(serverNotifications, { notification, targetClientId })
+        yield* PubSub.publish(serverNotifications, { notification, sequence, targetClientId })
       }
       const clientIds = yield* patchedProtocol.clientIds
       for (const clientId of clientStates.keys()) {
