@@ -353,7 +353,7 @@ it.effect("should reject invalid handles when Workflow task methods are called",
     assert.strictEqual((yield* terminal(harness, task.taskId)).status, "completed")
   }))
 
-it.effect("should ignore nonoutstanding responses when a known task is updated", () =>
+it.effect("should reject unknown input keys when a known task is updated", () =>
   Effect.gen(function*() {
     const harness = yield* makeHttpHarness(server)
     const task = yield* create(harness)
@@ -361,7 +361,8 @@ it.effect("should ignore nonoutstanding responses when a known task is updated",
       taskId: task.taskId,
       inputResponses: { unknown: { roots: [] } }
     })
-    yield* Schema.decodeUnknownEffect(Schema.Struct({ result: TaskWire.TaskAcknowledgement }))(body)
+    const { error } = yield* decodeError(body)
+    assert.strictEqual(error.code, -32602)
     assert.strictEqual((yield* terminal(harness, task.taskId)).status, "completed")
   }))
 
@@ -854,3 +855,52 @@ for (
       })
     }))
 }
+
+it.effect("should expose memory handler input and status through task get and resume through task update", () =>
+  Effect.gen(function*() {
+    const layer = McpTasks.toolkit(Reports, { owner: "shared" }, (tools) =>
+      McpTasks.layerMemory(tools, {
+        report: Effect.fnUntraced(function*() {
+          const task = yield* McpTasks.TaskContext
+          yield* task.setStatusMessage("Choose workspace roots")
+          const response = yield* task.requestInput({
+            key: "roots",
+            request: { method: "roots/list" },
+            response: Schema.Struct({ roots: Schema.Array(Schema.Struct({ uri: Schema.String })) })
+          })
+          yield* task.setStatusMessage("Report ready")
+          return `Report covers ${response.roots.length} roots`
+        })
+      })).pipe(Layer.provideMerge(serverLayer))
+    const harness = yield* makeHttpHarness(layer)
+    const created = yield* create(harness)
+    const capabilities = { ...metadata["io.modelcontextprotocol/clientCapabilities"], roots: {} }
+    let waiting = yield* get(harness, created.taskId, capabilities)
+    for (let attempt = 0; waiting.status === "working" && attempt < 100; attempt++) {
+      yield* Effect.yieldNow
+      waiting = yield* get(harness, created.taskId, capabilities)
+    }
+    assert.strictEqual(waiting.status, "input_required")
+    assert.strictEqual(waiting.statusMessage, "Choose workspace roots")
+    if (waiting.status === "input_required") {
+      assert.deepStrictEqual(waiting.inputRequests, { roots: { method: "roots/list" } })
+    }
+    const acknowledgement = yield* post(
+      harness,
+      "tasks/update",
+      {
+        taskId: created.taskId,
+        inputResponses: { roots: { roots: [{ uri: "file:///workspace" }] } }
+      },
+      undefined,
+      undefined,
+      capabilities
+    )
+    yield* Schema.decodeUnknownEffect(Schema.Struct({ result: TaskWire.TaskAcknowledgement }))(acknowledgement)
+    const completed = yield* terminal(harness, created.taskId)
+    assert.strictEqual(completed.status, "completed")
+    assert.strictEqual(completed.statusMessage, "Report ready")
+    if (completed.status === "completed") {
+      assert.strictEqual(completed.result.structuredContent, "Report covers 1 roots")
+    }
+  }))
