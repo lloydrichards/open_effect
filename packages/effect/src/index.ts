@@ -891,6 +891,12 @@ export * as UndefinedOr from "./UndefinedOr.ts"
 export * as Unify from "./Unify.ts"
 
 /**
+ * @stability experimental
+ * @since 4.0.7
+ */
+export * as UnixNanos from "./UnixNanos.ts"
+
+/**
  * @stability stable
  * @since 2.0.0
  */
