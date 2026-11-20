@@ -1201,7 +1201,9 @@ export class Transaction {
           if (bytes[bytes.length - 1] === CHAR_FORWARD_SLASH && object.kind !== "directory") {
             return yield* Result.fail(new M.InvalidResource({ operation: this.operation, reason: "wrongKind" }))
           }
-          return entry === undefined ? { object, support } : { object, parent, binding: entry, support }
+          return parent === undefined || entry === undefined
+            ? { object, support }
+            : { object, parent, binding: entry, support }
         }
       })
     } finally {
