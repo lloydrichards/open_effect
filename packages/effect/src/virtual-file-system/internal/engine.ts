@@ -1096,12 +1096,14 @@ export class Transaction {
               first = i + 1
             }
           }
-          let route: Route = { object: yield* this.directoryResult(id), support }
+          let object: Route["object"] = yield* this.directoryResult(id)
+          let parent: Route["parent"]
+          let entry: Route["binding"]
           yield* this.visitResult()
           let expanded = false
           for (let index = 0; index < components.length; index++) {
             const component = components[index]
-            const directory = route.object
+            const directory = object
             if (directory.kind !== "directory") {
               return yield* Result.fail(new M.InvalidResource({ operation: this.operation, reason: "wrongKind" }))
             }
@@ -1110,13 +1112,16 @@ export class Transaction {
             const visit = this.visitResult()
             if (Result.isFailure(visit)) return yield* Result.fail(visit.failure)
             if (isDot(component)) {
-              route = { object: directory, support }
+              parent = undefined
+              entry = undefined
               continue
             }
             if (isDotDot(component)) {
               yield* this.visitResult()
               id = id === this.caller.policy.root ? id : directory.parent ?? id
-              route = { object: yield* this.directoryResult(id), support }
+              object = yield* this.directoryResult(id)
+              parent = undefined
+              entry = undefined
               continue
             }
             let binding = directory.entries.get(Hex.encode(component))
@@ -1148,10 +1153,18 @@ export class Transaction {
             if (Result.isFailure(observed)) return yield* Result.fail(observed.failure)
             const node = observed.success
             support.push({ parent: directory.id, name: binding.name, version: binding.version, object: node.id })
-            route = { object: node, parent: directory, binding, support }
+            object = node
+            parent = directory
+            entry = binding
             const terminal = index === components.length - 1
             if (mkdir !== undefined && node.kind === "symlink" && !terminal) {
-              return { ...route, mkdirPrefixEnd: component.byteOffset - bytes.byteOffset + component.length }
+              return {
+                object: node,
+                parent: directory,
+                binding,
+                support,
+                mkdirPrefixEnd: component.byteOffset - bytes.byteOffset + component.length
+              }
             }
             if (node.kind === "symlink" && (!terminal || followFinal)) {
               yield* this.consumeLinkResult(state, node.target)
@@ -1185,10 +1198,10 @@ export class Transaction {
             id = node.id
           }
           if (expanded) continue
-          if (bytes[bytes.length - 1] === CHAR_FORWARD_SLASH && route.object.kind !== "directory") {
+          if (bytes[bytes.length - 1] === CHAR_FORWARD_SLASH && object.kind !== "directory") {
             return yield* Result.fail(new M.InvalidResource({ operation: this.operation, reason: "wrongKind" }))
           }
-          return route
+          return entry === undefined ? { object, support } : { object, parent, binding: entry, support }
         }
       })
     } finally {
